@@ -1,0 +1,318 @@
+{
+  "info": {
+    "name": "Workflow Builder API",
+    "description": "HTTP API for the workflow-builder service (Express + MongoDB + BullMQ).\n\n---\n**Collection variables**\n- `baseUrl` — e.g. `http://localhost:3000`\n- `accessToken` — JWT string (set **Authorization** via the **Headers** tab on each protected request; value is `{{accessToken}}`. The API accepts a raw JWT or `Bearer <jwt>` in that header — this collection uses the **header** only, not Postman’s *Bearer Token* auth type.)\n- `workflowId` — set to a real workflow `_id` from **List workflows** or **Create** response\n\n---\n**Auth**\n- **POST /auth/register** — body: `name`, `email`, `password` (min 8 chars). Returns `user` and `token`.\n- **POST /auth/login** — body: `email`, `password`. Returns `user` and `token`.\n- **Register** and **Login** include a **Tests** script that copies `token` into the collection variable `accessToken` when present.\n\n---\n**Prerequisites**\n- **MongoDB** (`MONGODB_URI` in `.env`)\n- **Redis** at `REDIS_HOST` / `REDIS_PORT` (defaults `127.0.0.1:6379`). Webhooks **enqueue** jobs; the **worker** processes them. Redis must be up or enqueue fails.\n\n---\n**Execution rules**\n- Only **`published`** workflows are executed.\n- **Graph:** there must be a **start node** (a node that is never the `to` of any edge). Samples use one node and `edges: []`.\n- **Run** documents store **`jobId`**: BullMQ job id when run via **worker** (webhook path); **UUID** when the scheduler calls `executeWorkflow` directly (no queue).\n\n---\n**Webhook**\n- **POST /webhook/:id** enqueues work and returns **202** with `{ \"message\", \"jobId\" }` (BullMQ id). Execution is asynchronous; check **`runs`** in MongoDB or server logs.\n- Send **`x-webhook-secret`** only when `trigger.config.secret` is set (must match).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000"
+    },
+    {
+      "key": "accessToken",
+      "value": "PASTE_JWT_HERE"
+    },
+    {
+      "key": "workflowId",
+      "value": "REPLACE_WITH_MONGODB_OBJECTID"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Root — API running",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Register",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "try {",
+                  "  const j = pm.response.json();",
+                  "  if (j.token) pm.collectionVariables.set(\"accessToken\", j.token);",
+                  "} catch (e) {}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Test User\",\n  \"email\": \"test@example.com\",\n  \"password\": \"password123\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/register",
+            "description": "Creates a user and returns JWT in `token`. Tests script stores it in `accessToken`."
+          },
+          "response": []
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "try {",
+                  "  const j = pm.response.json();",
+                  "  if (j.token) pm.collectionVariables.set(\"accessToken\", j.token);",
+                  "} catch (e) {}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"test@example.com\",\n  \"password\": \"password123\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/login",
+            "description": "Returns JWT in `token`. Tests script stores it in `accessToken`."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "User",
+      "item": [
+        {
+          "name": "Get profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{accessToken}}",
+                "description": "Raw JWT or `Bearer <jwt>` — sent as a normal header (not Postman Bearer Token auth)."
+              }
+            ],
+            "url": "{{baseUrl}}/user/profile",
+            "description": "Returns the authenticated user (password omitted). Requires valid JWT."
+          },
+          "response": []
+        },
+        {
+          "name": "Update profile (partial)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{accessToken}}",
+                "description": "Raw JWT or `Bearer <jwt>` — sent as a normal header (not Postman Bearer Token auth)."
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Updated name\",\n  \"email\": \"you@example.com\"\n}"
+            },
+            "url": "{{baseUrl}}/user/profile",
+            "description": "Send at least one of `name`, `email`."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Workflows",
+      "item": [
+        {
+          "name": "Create workflow",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "try {",
+                  "  const j = pm.response.json();",
+                  "  const id = j._id || j.id;",
+                  "  if (id) pm.collectionVariables.set(\"workflowId\", id);",
+                  "} catch (e) {}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{accessToken}}",
+                "description": "Raw JWT or `Bearer <jwt>` — sent as a normal header (not Postman Bearer Token auth)."
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Sample workflow\",\n  \"status\": \"published\",\n  \"trigger\": {\n    \"type\": \"webhook\",\n    \"config\": {\n      \"secret\": \"optional-shared-secret\"\n    }\n  },\n  \"nodes\": [\n    {\n      \"id\": \"1\",\n      \"type\": \"http\",\n      \"config\": {\n        \"method\": \"GET\",\n        \"url\": \"https://jsonplaceholder.typicode.com/todos/1\"\n      }\n    }\n  ],\n  \"edges\": []\n}"
+            },
+            "url": "{{baseUrl}}/workflow",
+            "description": "Creates a workflow. Tests script saves returned `_id` into collection variable `workflowId`."
+          },
+          "response": []
+        },
+        {
+          "name": "List workflows",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{accessToken}}",
+                "description": "Raw JWT or `Bearer <jwt>` — sent as a normal header (not Postman Bearer Token auth)."
+              }
+            ],
+            "url": "{{baseUrl}}/workflow"
+          },
+          "response": []
+        },
+        {
+          "name": "Get workflow by id",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{accessToken}}",
+                "description": "Raw JWT or `Bearer <jwt>` — sent as a normal header (not Postman Bearer Token auth)."
+              }
+            ],
+            "url": "{{baseUrl}}/workflow/{{workflowId}}"
+          },
+          "response": []
+        },
+        {
+          "name": "Update workflow (partial)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{accessToken}}",
+                "description": "Raw JWT or `Bearer <jwt>` — sent as a normal header (not Postman Bearer Token auth)."
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"published\",\n  \"name\": \"Renamed workflow\"\n}"
+            },
+            "url": "{{baseUrl}}/workflow/{{workflowId}}"
+          },
+          "response": []
+        },
+        {
+          "name": "Replace workflow (full)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{accessToken}}",
+                "description": "Raw JWT or `Bearer <jwt>` — sent as a normal header (not Postman Bearer Token auth)."
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Full replace example\",\n  \"status\": \"published\",\n  \"trigger\": {\n    \"type\": \"cron\",\n    \"config\": {\n      \"cron\": \"0 * * * *\"\n    }\n  },\n  \"nodes\": [\n    {\n      \"id\": \"1\",\n      \"type\": \"http\",\n      \"config\": {\n        \"method\": \"GET\",\n        \"url\": \"https://jsonplaceholder.typicode.com/todos/1\"\n      }\n    }\n  ],\n  \"edges\": []\n}"
+            },
+            "url": "{{baseUrl}}/workflow/{{workflowId}}",
+            "description": "Replaces the whole document; keep `published` if you need webhook/cron execution to succeed."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete workflow",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{accessToken}}",
+                "description": "Raw JWT or `Bearer <jwt>` — sent as a normal header (not Postman Bearer Token auth)."
+              }
+            ],
+            "url": "{{baseUrl}}/workflow/{{workflowId}}"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Triggers",
+      "item": [
+        {
+          "name": "Webhook — trigger workflow",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-webhook-secret",
+                "value": "optional-shared-secret",
+                "description": "Omit this header if the workflow has no trigger.config.secret."
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"payload\": \"from webhook\",\n  \"foo\": 1\n}"
+            },
+            "url": "{{baseUrl}}/webhook/{{workflowId}}",
+            "description": "Enqueues a BullMQ job (`execute-workflow`). Response **202** JSON: `message`, `jobId` (queue id). Requires **published** workflow. Worker runs `executeWorkflow`; **Run.jobId** matches queue **jobId**."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
