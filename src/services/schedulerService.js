@@ -13,10 +13,6 @@ function stopAllCronTasks() {
   scheduledByWorkflowId.clear();
 }
 
-/**
- * Rebuilds cron jobs from the database: only published workflows with
- * trigger.type === "cron", trigger.enabled !== false, and a valid cron expression.
- */
 async function syncCronSchedulesFromDb() {
   stopAllCronTasks();
 
