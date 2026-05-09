@@ -171,15 +171,3 @@ src/
 frontend/              # Vite + React + XYFlow editor
 docs/                  # Roadmap / internal notes
 ```
-
----
-
-## Scripts
-
-| Command | Where | Purpose |
-|---------|--------|---------|
-| `npm start` | root | Run API + worker |
-| `npm run dev` | root | Same with nodemon |
-| `npm run dev` | `frontend/` | Vite dev server |
-| `npm run build` | `frontend/` | Production build |
-| `npm run lint` | `frontend/` | ESLint |
