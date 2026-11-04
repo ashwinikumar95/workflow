@@ -3,21 +3,25 @@ const express = require("express");
 const mongoose = require("mongoose");
 const config = require("./config");
 const cors = require("cors");
-const workflowRoutes = require("./src/routes/WorkflowRoutes");
+const workflowRoutes = require("./src/routes/workflowRoutes");
 const triggerRoutes = require("./src/routes/triggerRoutes");
 const userRoutes = require("./src/routes/userRoutes");
 const authRoutes = require("./src/routes/authRoutes");
 const runRoutes = require("./src/routes/runRoutes");
-const { startScheduler } = require("./src/services/schedulerService");
 
 require("./src/services/queue");
-require("./src/workers/worker");
+if (config.workflowWorkerEnabled) {
+  require("./src/workers/worker");
+}
+if (config.schedulerEnabled) {
+  const { startScheduler } = require("./src/services/schedulerService");
+  startScheduler();
+}
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
-startScheduler();
 app.use("/auth", authRoutes);
 app.use("/workflow", workflowRoutes);
 app.use("/", triggerRoutes);

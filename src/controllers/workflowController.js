@@ -1,10 +1,13 @@
 const mongoose = require("mongoose");
-const Workflow = require("../models/Workflow");
-const { syncCronSchedulesFromDb } = require("../services/schedulerService");
-const { enqueueWorkflowJob } = require("../services/enqueueWorkflowJob");
+const Workflow = require("../models/workflow");
 const { validateWorkflowGraph } = require("../utils/workflowGraph");
+const {
+  redactWorkflowForResponse,
+  prepareWorkflowWrite,
+} = require("../utils/redactSecrets");
 
 function resyncCronSchedules() {
+  const { syncCronSchedulesFromDb } = require("../services/schedulerService");
   syncCronSchedulesFromDb().catch((err) =>
     console.error("[scheduler] Resync after workflow change failed:", err.message)
   );
@@ -30,10 +33,10 @@ function stripUserIdField(body) {
 
 exports.createWorkflow = async (req, res) => {
   try {
-    const data = stripUserIdField(req.body);
+    const data = prepareWorkflowWrite(stripUserIdField(req.body));
     const workflow = await Workflow.create({ ...data, userId: req.user.id });
     resyncCronSchedules();
-    res.status(201).json(workflow);
+    res.status(201).json(redactWorkflowForResponse(workflow));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -44,7 +47,7 @@ exports.listWorkflows = async (req, res) => {
     const workflows = await Workflow.find({ userId: req.user.id })
       .sort({ updatedAt: -1 })
       .lean();
-    res.json(workflows);
+    res.json(redactWorkflowForResponse(workflows));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -62,7 +65,7 @@ exports.getWorkflowById = async (req, res) => {
     if (!workflow) {
       return notFoundResponse(res);
     }
-    res.json(workflow);
+    res.json(redactWorkflowForResponse(workflow));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -87,7 +90,7 @@ exports.setTriggerEnabled = async (req, res) => {
         "trigger.type": { $in: ["webhook", "cron"] }
       },
       { $set: { "trigger.enabled": enabled } },
-      { new: true, runValidators: true }
+      { returnDocument: "after", runValidators: true }
     ).lean();
 
     if (!workflow) {
@@ -102,7 +105,7 @@ exports.setTriggerEnabled = async (req, res) => {
     }
 
     resyncCronSchedules();
-    res.json(workflow);
+    res.json(redactWorkflowForResponse(workflow));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -118,7 +121,7 @@ exports.updateWorkflow = async (req, res) => {
       return notFoundResponse(res);
     }
 
-    const updates = stripUserIdField(req.body);
+    const updates = prepareWorkflowWrite(stripUserIdField(req.body), existing.toObject());
 
     if (existing.status === "published") {
       const keys = Object.keys(updates);
@@ -135,7 +138,7 @@ exports.updateWorkflow = async (req, res) => {
       existing.name = updates.name;
       await existing.save();
       resyncCronSchedules();
-      return res.json(existing.toObject());
+      return res.json(redactWorkflowForResponse(existing.toObject()));
     }
 
     const workflow = await Workflow.findOneAndUpdate(
@@ -148,7 +151,7 @@ exports.updateWorkflow = async (req, res) => {
       return notFoundResponse(res);
     }
     resyncCronSchedules();
-    res.json(workflow);
+    res.json(redactWorkflowForResponse(workflow));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -170,13 +173,13 @@ exports.replaceWorkflow = async (req, res) => {
       });
     }
 
-    const replacement = stripUserIdField(req.body);
+    const replacement = prepareWorkflowWrite(stripUserIdField(req.body), doc.toObject());
     delete replacement._id;
 
     doc.overwrite({ ...replacement, userId: req.user.id });
     await doc.save();
     resyncCronSchedules();
-    res.json(doc.toObject());
+    res.json(redactWorkflowForResponse(doc.toObject()));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -214,7 +217,7 @@ exports.publishWorkflow = async (req, res) => {
     doc.status = "published";
     await doc.save();
     resyncCronSchedules();
-    res.json(doc.toObject());
+    res.json(redactWorkflowForResponse(doc.toObject()));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -243,6 +246,7 @@ exports.startWorkflow = async (req, res) => {
         ? req.body
         : {};
 
+    const { enqueueWorkflowJob } = require("../services/enqueueWorkflowJob");
     const job = await enqueueWorkflowJob(workflow._id, input);
     res.status(202).json({ message: "Workflow queued", jobId: job.id });
   } catch (err) {

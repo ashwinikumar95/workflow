@@ -43,7 +43,17 @@ const workflowSchema = new mongoose.Schema({
       to: String,
       condition: String // "true" | "false"
     }
-  ]
+  ],
+
+  /**
+   * Functional repository for this workflow. `credentialRef` is an environment
+   * variable name on the workflow worker, not the secret value.
+   */
+  repository: {
+    location: String,
+    defaultBranch: String,
+    credentialRef: String,
+  },
 }, { timestamps: true });
 
 module.exports =

@@ -2,6 +2,13 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { workflowApi } from '../lib/api'
 
+function statusClass(status) {
+  if (status === 'success') return 'ok'
+  if (status === 'failed') return 'danger'
+  if (status === 'waiting') return 'wait'
+  return 'muted'
+}
+
 export default function WorkflowRuns() {
   const { id } = useParams()
   const [runs, setRuns] = useState([])
@@ -29,6 +36,22 @@ export default function WorkflowRuns() {
   useEffect(() => {
     load()
   }, [load])
+
+  const anyWaiting = runs.some((run) => run.status === 'waiting')
+
+  useEffect(() => {
+    if (!anyWaiting) return undefined
+    const timer = setInterval(() => {
+      workflowApi
+        .runs(id, { page, limit })
+        .then(({ data }) => {
+          setRuns(data.runs || [])
+          setTotal(data.total ?? 0)
+        })
+        .catch(() => {})
+    }, 3000)
+    return () => clearInterval(timer)
+  }, [anyWaiting, id, page])
 
   return (
     <div className="runs-page dashboard">
@@ -64,9 +87,7 @@ export default function WorkflowRuns() {
             {runs.map((r) => (
               <li key={r._id}>
                 <Link to={`/workflows/${id}/runs/${r._id}`} className="run-row">
-                  <span className={`badge badge-${r.status === 'success' ? 'ok' : r.status === 'failed' ? 'danger' : 'muted'}`}>
-                    {r.status}
-                  </span>
+                  <span className={`badge badge-${statusClass(r.status)}`}>{r.status}</span>
                   <span className="run-meta">
                     {r.jobId ? `job ${r.jobId}` : ''} ·{' '}
                     {r.startedAt ? new Date(r.startedAt).toLocaleString() : '—'}

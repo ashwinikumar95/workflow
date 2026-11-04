@@ -1,6 +1,6 @@
 const cron = require("node-cron");
 const mongoose = require("mongoose");
-const Workflow = require("../models/Workflow");
+const Workflow = require("../models/workflow");
 const { enqueueWorkflowJob } = require("./enqueueWorkflowJob");
 
 /** @type {Map<string, ReturnType<typeof cron.schedule>>} */

@@ -1,0 +1,23 @@
+import { Agent, CursorAgentError } from "@cursor/sdk";
+import { runSandbox } from "./agent-sandbox-lib.mjs";
+
+export { runSandbox, CursorAgentError };
+
+const isMain = process.argv[1] && process.argv[1].endsWith("agent-sandbox-entry.mjs");
+
+if (isMain) {
+  const prompt = process.env.WORKFLOW_PROMPT || "";
+  const apiKey = process.env.CURSOR_API_KEY;
+  runSandbox({
+    Agent,
+    apiKey,
+    modelId: process.env.CURSOR_MODEL || "composer-2.5",
+    cwd: "/worktree",
+    prompt,
+    agentExecutionId: process.env.WORKFLOW_AGENT_EXECUTION_ID,
+  }).catch((err) => {
+    const retryable = err instanceof CursorAgentError && err.retryable === true;
+    process.stderr.write(err && err.message ? err.message : "agent failed");
+    process.exit(retryable ? 75 : 1);
+  });
+}

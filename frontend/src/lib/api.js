@@ -67,6 +67,7 @@ export const workflowApi = {
 
 export const runApi = {
   get: (runId) => api.get(`/runs/${runId}`),
+  decide: (runId, decision) => api.post(`/runs/${runId}/decision`, { decision }),
 }
 
 export const userApi = {

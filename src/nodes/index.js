@@ -44,7 +44,7 @@ function evaluateCondition(input, cfg) {
   }
 }
 
-async function executeNode(node, input) {
+async function executeNode(node, input, runState) {
   const cfg = node.config && typeof node.config === "object" ? node.config : {};
 
   switch (node.type) {
@@ -60,6 +60,7 @@ async function executeNode(node, input) {
         url: cfg.url,
         headers,
         data: cfg.body !== undefined ? cfg.body : {},
+        timeout: config.httpTimeoutMs,
       });
       return res.data;
     }
@@ -73,6 +74,33 @@ async function executeNode(node, input) {
       if (sec > 60) sec = 60;
       await sleep(Math.round(sec * 1000));
       return input;
+    }
+
+    case "jira":
+    case "analysis":
+    case "cursorPrompt":
+    case "gitBranch":
+    case "cursorAgent":
+    case "playwright":
+    case "githubPr":
+      return require("./lifecycle")[node.type](node, input, runState);
+
+    case "approval": {
+      const decision = runState && runState.decision;
+      if (decision === "approved" || decision === "rejected") {
+        const base =
+          input && typeof input === "object" && !Array.isArray(input)
+            ? { ...input }
+            : { payload: input };
+        const branch =
+          base.branch === "true" || base.branch === "false"
+            ? base.branch
+            : decision === "approved"
+              ? "true"
+              : "false";
+        return { ...base, branch };
+      }
+      return { control: "wait", kind: "approval", output: input };
     }
 
     case "notify": {
