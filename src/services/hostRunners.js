@@ -160,6 +160,25 @@ function pollReady(port, readiness, timeoutMs) {
   });
 }
 
+async function acquirePortLock(runId, port) {
+  if (!runId || !/^[a-f0-9]{24}$/.test(String(runId))) return null;
+  try {
+    const mongoose = require("mongoose");
+    if (mongoose.connection.readyState !== 1) return null;
+    const resourceLocks = require("./resourceLocks");
+    const got = await resourceLocks.acquire(runId, [`port:${port}`]);
+    if (!got.ok) {
+      const err = new Error("Vite port is busy");
+      err.code = "PORT_BUSY";
+      throw err;
+    }
+    return got;
+  } catch (err) {
+    if (err && err.code === "PORT_BUSY") throw err;
+    return null;
+  }
+}
+
 async function startViteHost(opts) {
   const data = opts.data || opts;
   const appCommand = opts.appCommand || data.appCommand;
@@ -170,6 +189,13 @@ async function startViteHost(opts) {
   const cwd = opts.cwd || opts.appCwd;
   const readiness = opts.readiness || data.readiness || "/";
   const unlock = await hostProcess.reservePort(port);
+  let portLock = null;
+  try {
+    portLock = await acquirePortLock(data.runId, port);
+  } catch (err) {
+    unlock();
+    throw err;
+  }
   const argv = withPortFlags(appCommand, port);
   let lastErr = new Error("Vite failed to become ready");
   let unlocked = false;
@@ -177,6 +203,10 @@ async function startViteHost(opts) {
     if (unlocked) return;
     unlocked = true;
     unlock();
+    if (portLock && portLock.token) {
+      const resourceLocks = require("./resourceLocks");
+      resourceLocks.release(data.runId, portLock.token, [`port:${port}`]).catch(() => {});
+    }
   };
   try {
     for (let attempt = 1; attempt <= VITE_ATTEMPTS; attempt++) {

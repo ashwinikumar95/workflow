@@ -3,6 +3,7 @@ const Run = require("../models/Run");
 const Workflow = require("../models/workflow");
 const { redactRunForResponse } = require("../utils/redactSecrets");
 const { recordDecision } = require("../services/approvalService");
+const runControl = require("../services/runControl");
 
 function invalidIdResponse(res) {
   return res.status(400).json({ error: "Invalid id" });
@@ -89,6 +90,57 @@ exports.decideRun = async (req, res) => {
     }
 
     const outcome = await recordDecision(run._id, req.body && req.body.decision, req.user.id);
+    if (outcome.http === 200) {
+      return res.status(200).json(redactRunForResponse(outcome.run));
+    }
+    return res.status(outcome.http).json({ error: outcome.error });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+async function ownedRun(req, res) {
+  const { runId } = req.params;
+  if (!mongoose.Types.ObjectId.isValid(runId)) {
+    invalidIdResponse(res);
+    return null;
+  }
+  const run = await Run.findById(runId).lean();
+  if (!run) {
+    notFoundResponse(res);
+    return null;
+  }
+  const wf = await Workflow.findById(run.workflowId).select("userId").lean();
+  if (!wf) {
+    notFoundResponse(res);
+    return null;
+  }
+  if (String(wf.userId) !== String(req.user.id)) {
+    res.status(403).json({ error: "Forbidden" });
+    return null;
+  }
+  return run;
+}
+
+exports.cancelRun = async (req, res) => {
+  try {
+    const run = await ownedRun(req, res);
+    if (!run) return;
+    const outcome = await runControl.cancelRun(run._id);
+    if (outcome.http === 200) {
+      return res.status(200).json(redactRunForResponse(outcome.run));
+    }
+    return res.status(outcome.http).json({ error: outcome.error });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.retryRun = async (req, res) => {
+  try {
+    const run = await ownedRun(req, res);
+    if (!run) return;
+    const outcome = await runControl.retryRun(run._id);
     if (outcome.http === 200) {
       return res.status(200).json(redactRunForResponse(outcome.run));
     }

@@ -156,9 +156,22 @@ async function revParse(worktreePath) {
   return result.stdout.trim();
 }
 
+async function dirtyFiles(worktreePath) {
+  const result = await runGit(["-C", worktreePath, "status", "--porcelain", "-uall"]);
+  return String(result.stdout || "")
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .map((line) => {
+      if (line.startsWith("?? ") || line.startsWith("!! ")) return line.slice(3);
+      if (line.length >= 4) return line.slice(3).replace(/^.* -> /, "").trim();
+      return line;
+    });
+}
+
 async function isClean(worktreePath) {
-  const result = await runGit(["-C", worktreePath, "status", "--porcelain"]);
-  return result.stdout.trim() === "";
+  const files = await dirtyFiles(worktreePath);
+  return files.length === 0;
 }
 
 async function isAncestor(ancestor, descendant, worktreePath) {
@@ -550,6 +563,8 @@ module.exports = {
   pushArgs,
   pushBranch,
   revParse,
+  abbrevHead,
+  dirtyFiles,
   isClean,
   isAncestor,
   diffIsEmpty,

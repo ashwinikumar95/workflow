@@ -68,6 +68,8 @@ export const workflowApi = {
 export const runApi = {
   get: (runId) => api.get(`/runs/${runId}`),
   decide: (runId, decision) => api.post(`/runs/${runId}/decision`, { decision }),
+  cancel: (runId) => api.post(`/runs/${runId}/cancel`),
+  retry: (runId) => api.post(`/runs/${runId}/retry`),
 }
 
 export const userApi = {

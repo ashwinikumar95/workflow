@@ -99,6 +99,10 @@ function startWorkflowWorker() {
     git.reconcileWorktrees().catch((err) => {
       console.error("[Worker] reconcileWorktrees failed:", err.message);
     });
+    const resourceLocks = require("../services/resourceLocks");
+    resourceLocks.heartbeat().catch((err) => {
+      console.error("[Worker] resource lock heartbeat failed:", err.message);
+    });
   }, 5000);
   if (typeof pendingTimer.unref === "function") pendingTimer.unref();
   worker.on("closed", () => clearInterval(pendingTimer));

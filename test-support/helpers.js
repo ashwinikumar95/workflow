@@ -29,6 +29,14 @@ async function clearTestData() {
   assertTestDatabase();
   await mongoose.connection.collection("runs").deleteMany({});
   await mongoose.connection.collection("workflows").deleteMany({});
+  const extras = ["ticketruns", "resourcelocks"];
+  for (const name of extras) {
+    try {
+      await mongoose.connection.collection(name).deleteMany({});
+    } catch {
+      // collection may not exist yet
+    }
+  }
 }
 
 async function createPublishedWorkflow(nodes, edges) {

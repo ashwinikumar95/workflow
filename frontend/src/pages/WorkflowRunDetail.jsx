@@ -17,6 +17,8 @@ export default function WorkflowRunDetail() {
   const [loadError, setLoadError] = useState('')
   const [decisionError, setDecisionError] = useState('')
   const [deciding, setDeciding] = useState(false)
+  const [controlError, setControlError] = useState('')
+  const [controlling, setControlling] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -40,7 +42,7 @@ export default function WorkflowRunDetail() {
   }, [runId])
 
   useEffect(() => {
-    if (run?.status !== 'waiting') return undefined
+    if (run?.status !== 'waiting' && run?.status !== 'running') return undefined
     const timer = setInterval(() => {
       runApi
         .get(runId)
@@ -62,6 +64,22 @@ export default function WorkflowRunDetail() {
       setDeciding(false)
     }
   }
+
+  async function control(action) {
+    setControlling(true)
+    setControlError('')
+    try {
+      const { data } = action === 'cancel' ? await runApi.cancel(runId) : await runApi.retry(runId)
+      setRun(data)
+    } catch (err) {
+      setControlError(err.response?.data?.error || err.message || `${action} failed`)
+    } finally {
+      setControlling(false)
+    }
+  }
+
+  const canCancel = run && ['running', 'waiting', 'interrupted'].includes(run.status)
+  const canRetry = run && ['interrupted', 'failed'].includes(run.status)
 
   if (loading) {
     return (
@@ -96,6 +114,32 @@ export default function WorkflowRunDetail() {
       </p>
 
       {decisionError ? <div className="alert alert-error">{decisionError}</div> : null}
+      {controlError ? <div className="alert alert-error">{controlError}</div> : null}
+
+      {canCancel || canRetry ? (
+        <div className="approval-actions">
+          {canCancel ? (
+            <button
+              type="button"
+              className="btn btn-danger-ghost"
+              disabled={controlling}
+              onClick={() => control('cancel')}
+            >
+              Cancel
+            </button>
+          ) : null}
+          {canRetry ? (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={controlling}
+              onClick={() => control('retry')}
+            >
+              Retry
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       {run.external?.prUrl ? (
         <p>

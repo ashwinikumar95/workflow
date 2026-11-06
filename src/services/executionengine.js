@@ -3,8 +3,11 @@ const { calculateObjectSize } = require("bson");
 const { v4: uuidv4 } = require("uuid");
 const Workflow = require("../models/workflow");
 const Run = require("../models/Run");
+const TicketRun = require("../models/TicketRun");
 const config = require("../../config");
 const nodes = require("../nodes");
+const ticketState = require("./ticketState");
+const { cancelledError } = require("./runControl");
 
 const CONTEXT_LIMIT_BYTES = 256 * 1024;
 const pipelineUpdate = { returnDocument: "after", updatePipeline: true };
@@ -454,6 +457,98 @@ async function maybeNotifyRunFailure(workflowId, message) {
   }
 }
 
+function stageForNode(node) {
+  if (!node) return "";
+  if (node.config && typeof node.config.ticketStage === "string" && node.config.ticketStage) {
+    return node.config.ticketStage;
+  }
+  switch (node.type) {
+    case "jiraUpdate":
+      return node.config && node.config.action === "review" ? "jira_closeout" : "claimed";
+    case "gitBranch":
+      return "claimed";
+    case "cursorAgent": {
+      const mode = node.config && node.config.mode;
+      if (mode === "plan") return "planning";
+      if (mode === "review") return "rules_review";
+      return "implementing";
+    }
+    case "approval":
+      return "awaiting_approval";
+    case "playwright":
+      return "playwright";
+    case "githubPr":
+      return "pr_open";
+    default:
+      return "";
+  }
+}
+
+function stateForStage(stage) {
+  switch (stage) {
+    case "claimed":
+      return "claimed";
+    case "planning":
+      return "planning";
+    case "awaiting_approval":
+      return "awaiting_approval";
+    case "queued":
+    case "acquireResources":
+      return "queued";
+    case "implementing":
+      return "implementing";
+    case "playwright":
+    case "gates":
+    case "rules_review":
+    case "baseline":
+      return "verifying";
+    case "pr_open":
+    case "push":
+      return "pr_open";
+    default:
+      return "";
+  }
+}
+
+async function isRunCancelled(runId) {
+  const ticket = await TicketRun.findOne({ runId: String(runId) }).select("state").lean();
+  if (ticket && ticket.state === "cancelled") return true;
+  const row = await Run.findById(runId).select("status").lean();
+  return Boolean(row && row.status === "cancelled");
+}
+
+async function persistCancelled(runId, token, patch) {
+  const saved = await engine.persistRun(runId, token, {
+    context: patch.context,
+    currentNodeId: patch.currentNodeId ?? null,
+    status: "cancelled",
+    ended: true,
+    log: patch.log,
+  });
+  if (!saved) throw claimBusy();
+  return Run.findById(runId);
+}
+
+async function syncTicketStage(run, node) {
+  const ticket = await TicketRun.findOne({ runId: String(run._id) });
+  if (!ticket) return null;
+  if (ticket.state === "cancelled") throw cancelledError();
+  const stage = stageForNode(node);
+  if (stage && stage !== ticket.stage) {
+    await TicketRun.updateOne(
+      { _id: ticket._id, state: { $ne: "cancelled" } },
+      { $set: { stage } }
+    );
+  }
+  const nextState = stateForStage(stage);
+  if (nextState && nextState !== ticket.state && ticketState.isAllowed(ticket.state, nextState)) {
+    await ticketState.transition(ticket._id, ticket.state, nextState, { stage: stage || ticket.stage });
+  }
+  const latest = await TicketRun.findById(ticket._id);
+  if (latest && latest.state === "cancelled") throw cancelledError();
+  return latest;
+}
+
 async function executeWorkflow(workflowId, inputData = {}, jobId) {
   const resolvedJobId = resolveJobId(jobId);
   console.log(
@@ -472,6 +567,8 @@ async function executeWorkflow(workflowId, inputData = {}, jobId) {
   const run = await loadOrCreateRun(workflowId, resolvedJobId);
   if (run.status === "success") return run;
   if (run.status === "waiting") return run;
+  if (run.status === "cancelled") return run;
+  if (run.status === "interrupted") return run;
 
   const leaseMs = config.executionClaimLeaseMs;
   const claimed = await engine.acquireExecutionClaim(run._id, leaseMs);
@@ -491,6 +588,14 @@ async function executeWorkflow(workflowId, inputData = {}, jobId) {
     });
     if (!failed) throw claimBusy();
     throw err;
+  }
+
+  if (await isRunCancelled(claimed._id)) {
+    return persistCancelled(claimed._id, token, {
+      context: inputData,
+      currentNodeId: position.node ? position.node.id : claimed.currentNodeId,
+      log: { status: "cancelled", error: "cancelled" },
+    });
   }
 
   return walkClaimed(workflow, claimed, token, position, leaseMs);
@@ -606,6 +711,26 @@ async function walkClaimed(workflow, run, token, position, leaseMs) {
   const externalState = cloneExternal(run.external);
 
   while (currentNode) {
+    if (await isRunCancelled(run._id)) {
+      return persistCancelled(run._id, token, {
+        context: currentInput,
+        currentNodeId: currentNode.id,
+        log: { nodeId: currentNode.id, status: "cancelled", error: "cancelled" },
+      });
+    }
+    try {
+      await syncTicketStage(run, currentNode);
+    } catch (err) {
+      if (err && err.code === "RUN_CANCELLED") {
+        return persistCancelled(run._id, token, {
+          context: currentInput,
+          currentNodeId: currentNode.id,
+          log: { nodeId: currentNode.id, status: "cancelled", error: "cancelled" },
+        });
+      }
+      throw err;
+    }
+
     if (!isFirstNode) {
       const renewed = await engine.renewExecutionClaim(run._id, token, leaseMs);
       if (!renewed) throw claimBusy();
@@ -666,6 +791,18 @@ async function walkClaimed(workflow, run, token, position, leaseMs) {
     if (renewer.lost()) throw claimBusy();
 
     if (thrown) {
+      if (thrown.code === "RUN_CANCELLED" || (await isRunCancelled(run._id))) {
+        return persistCancelled(run._id, token, {
+          context: currentInput,
+          currentNodeId: currentNode.id,
+          log: {
+            nodeId: currentNode.id,
+            status: "cancelled",
+            error: thrown.code === "RUN_CANCELLED" ? "cancelled" : thrown.message,
+            input: preview(currentInput),
+          },
+        });
+      }
       const failed = await engine.persistRun(run._id, token, {
         context: currentInput,
         currentNodeId: currentNode.id,
