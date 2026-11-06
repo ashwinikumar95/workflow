@@ -1,0 +1,21 @@
+---
+description: Native/vxceed UI component standards for Mt-Fuji-Central (no Syncfusion SDK)
+alwaysApply: true
+---
+
+# Native Components Rules
+
+Do not import, register, or use Syncfusion `@syncfusion/*` packages or `<ejs-*>` tags. Use the native `vxceed*` / `Native*` components already in this repo.
+
+## Hard rules
+
+- Never add `@syncfusion/*` dependencies or `from '@syncfusion/...'` imports.
+- Never introduce new `<ejs-*>` tags.
+- Prefer existing `vxceed*` / `Native*` components over a new third-party UI kit.
+- `.e-*` and `mfc-ejs-*` class names on native components are CSS compatibility only. Do not restore Syncfusion to “match” them.
+- Vue 3 Options API remains mandatory for app components unless explicitly requested otherwise.
+
+## When editing legacy screens
+
+- Replace remaining `<ejs-*>` usage with the map in `central-project-rules.mdc`.
+- Do not add dual Syncfusion/native branches in new UI work.

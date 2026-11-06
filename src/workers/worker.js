@@ -99,9 +99,13 @@ function startWorkflowWorker() {
     enqueuePendingExternalJobs().catch((err) => {
       console.error("[Worker] enqueuePendingExternalJobs failed:", err.message);
     });
-    const git = require("../services/gitService");
-    git.reconcileWorktrees().catch((err) => {
-      console.error("[Worker] reconcileWorktrees failed:", err.message);
+    const retention = require("../services/retention");
+    retention.runRetentionJobs().catch((err) => {
+      console.error("[Worker] retention jobs failed:", err.message);
+    });
+    const recovery = require("../services/recovery");
+    recovery.cleanupLeftoverProcesses().catch((err) => {
+      console.error("[Worker] leftover process cleanup failed:", err.message);
     });
     const resourceLocks = require("../services/resourceLocks");
     resourceLocks.heartbeat().catch((err) => {
@@ -111,13 +115,14 @@ function startWorkflowWorker() {
     slack.retryPending().catch((err) => {
       console.error("[Worker] Slack retry failed:", err.message);
     });
-    const artifacts = require("../services/artifactRedactor");
-    artifacts.reconcileArtifacts().catch((err) => {
-      console.error("[Worker] artifact retention failed:", err.message);
-    });
   }, 5000);
   if (typeof pendingTimer.unref === "function") pendingTimer.unref();
   worker.on("closed", () => clearInterval(pendingTimer));
+
+  const recovery = require("../services/recovery");
+  recovery.cleanupLeftoverProcesses().catch((err) => {
+    console.error("[Worker] leftover process cleanup on start failed:", err.message);
+  });
 
   return worker;
 }

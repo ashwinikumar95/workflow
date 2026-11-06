@@ -557,12 +557,13 @@ async function keepReconciledWorktree(run) {
 async function reconcileWorktrees({ repoPath, worktreesDir } = {}) {
   const Run = require("../models/Run");
   const dir = worktreesDir || config.worktreesDir;
-  if (!dir) return;
+  const removed = [];
+  if (!dir) return { removed };
   let base;
   try {
     base = await realDir(dir);
   } catch {
-    return;
+    return { removed };
   }
   if (repoPath && fs.existsSync(repoPath)) {
     await runGit(["-C", repoPath, "worktree", "prune"]).catch((err) => {
@@ -632,13 +633,17 @@ async function reconcileWorktrees({ repoPath, worktreesDir } = {}) {
     const runId = name.slice(0, 24);
     const run = await Run.findById(runId);
     if (await keepReconciledWorktree(run)) continue;
-    await fs.promises.rm(real, { recursive: true, force: true }).catch((err) => {
+    try {
+      await fs.promises.rm(real, { recursive: true, force: true });
+      removed.push(real);
+    } catch (err) {
       console.error("[git] orphan remove failed:", err.message);
-    });
+    }
     if (repoPath) {
       await runGit(["-C", repoPath, "worktree", "prune"]).catch(() => {});
     }
   }
+  return { removed };
 }
 
 module.exports = {
@@ -666,6 +671,7 @@ module.exports = {
   resolveRepoPath,
   resolveBaseBranch,
   findEscapingSymlink,
+  keepReconciledWorktree,
   reconcileWorktrees,
   SEGMENT,
 };

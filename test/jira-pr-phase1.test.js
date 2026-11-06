@@ -134,7 +134,7 @@ describe("jira-pr phase 1 project profiles", () => {
     const profiles = await loadRegistry();
     assert.deepEqual(Object.keys(profiles).sort(), ["MF", "MFC", "QUT", "TAC"]);
     assert.equal(profiles.MF.enabled, true);
-    assert.equal(profiles.MFC.enabled, false);
+    assert.equal(profiles.MFC.enabled, true);
     assert.equal(profiles.MF.linkedProfile, "QUT");
     assert.equal(profiles.QUT.linkedProfile, "MF");
     assert.equal(profiles.MFC.linkedProfile, "TAC");

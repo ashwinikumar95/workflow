@@ -16,6 +16,7 @@ const SEARCH_FIELDS = [
 const MAX_RETRY_AFTER_MS = 60 * 1000;
 const DEFAULT_RETRY_AFTER_MS = 1000;
 const MAX_SEARCH_PAGES = 50;
+const DEFAULT_SEARCH_PAGE_SIZE = 50;
 
 function adfToText(node) {
   if (node == null) return "";
@@ -203,37 +204,95 @@ async function fetchIssue(issueKey, deps = {}) {
   return normalizeIssue(res && res.data ? res.data : {}, issueKey);
 }
 
+function searchLimit(deps = {}) {
+  const maxResults =
+    Number.isInteger(deps.maxResults) && deps.maxResults > 0
+      ? deps.maxResults
+      : DEFAULT_SEARCH_PAGE_SIZE;
+  const maxIssues =
+    Number.isInteger(deps.maxIssues) && deps.maxIssues > 0 ? deps.maxIssues : Number.POSITIVE_INFINITY;
+  const pageDelayMs =
+    Number.isInteger(deps.pageDelayMs) && deps.pageDelayMs >= 0 ? deps.pageDelayMs : 0;
+  const maxPages =
+    Number.isInteger(deps.maxPages) && deps.maxPages > 0 ? deps.maxPages : MAX_SEARCH_PAGES;
+  return { maxResults, maxIssues, pageDelayMs, maxPages };
+}
+
 /**
  * @param {string} jql
- * @param {{ http?: { post: Function }, sleep?: Function, attempts?: number, maxResults?: number }} [deps]
+ * @param {{ http?: { post: Function }, sleep?: Function, attempts?: number, maxResults?: number, maxIssues?: number, pageDelayMs?: number, maxPages?: number }} [deps]
  */
-async function searchIssues(jql, deps = {}) {
+async function searchIssuesDetailed(jql, deps = {}) {
   const query = typeof jql === "string" ? jql.trim() : "";
-  if (!query) return [];
+  if (!query) return { issues: [], truncated: false, reason: "", pages: 0 };
   const http = httpClient(deps);
-  const maxResults =
-    Number.isInteger(deps.maxResults) && deps.maxResults > 0 ? deps.maxResults : 50;
+  const sleepFn = deps.sleep || sleep;
+  const { maxResults, maxIssues, pageDelayMs, maxPages } = searchLimit(deps);
   const issues = [];
   let nextPageToken = "";
-  for (let page = 0; page < MAX_SEARCH_PAGES; page += 1) {
+  let pages = 0;
+  let truncated = false;
+  let reason = "";
+
+  for (let page = 0; page < maxPages; page += 1) {
+    const remaining = maxIssues - issues.length;
+    if (!(remaining > 0)) {
+      truncated = true;
+      reason = "max_issues";
+      break;
+    }
     const body = {
       jql: query,
-      maxResults,
+      maxResults: Math.min(maxResults, remaining),
       fields: SEARCH_FIELDS,
     };
     if (nextPageToken) body.nextPageToken = nextPageToken;
-    const res = await withRetry(
-      () => http.post(`${jiraBase()}/rest/api/3/search/jql`, body, requestOptions()),
-      deps
-    );
+    let res;
+    try {
+      res = await withRetry(
+        () => http.post(`${jiraBase()}/rest/api/3/search/jql`, body, requestOptions()),
+        deps
+      );
+    } catch (err) {
+      if (is429(err) && issues.length) {
+        return { issues, truncated: true, reason: "rate_limited", pages };
+      }
+      throw err;
+    }
+    pages += 1;
     const data = res && res.data ? res.data : {};
     const batch = Array.isArray(data.issues) ? data.issues : [];
     for (const raw of batch) {
+      if (issues.length >= maxIssues) {
+        truncated = true;
+        reason = "max_issues";
+        break;
+      }
       issues.push(normalizeIssue(raw, raw && raw.key));
     }
+    if (truncated) break;
     if (data.isLast || !data.nextPageToken) break;
+    if (issues.length >= maxIssues) {
+      truncated = true;
+      reason = "max_issues";
+      break;
+    }
     nextPageToken = String(data.nextPageToken);
+    if (pageDelayMs > 0) await sleepFn(pageDelayMs);
   }
+  return { issues, truncated, reason, pages };
+}
+
+/**
+ * @param {string} jql
+ * @param {{ http?: { post: Function }, sleep?: Function, attempts?: number, maxResults?: number, maxIssues?: number, pageDelayMs?: number }} [deps]
+ */
+async function searchIssues(jql, deps = {}) {
+  const result = await searchIssuesDetailed(jql, deps);
+  const issues = result.issues;
+  issues.truncated = result.truncated;
+  issues.reason = result.reason;
+  issues.pages = result.pages;
   return issues;
 }
 
@@ -378,8 +437,10 @@ async function transitionIssue(issueKey, statusName, deps = {}) {
 module.exports = {
   ISSUE_KEY,
   SEARCH_FIELDS,
+  MAX_SEARCH_PAGES,
   fetchIssue,
   searchIssues,
+  searchIssuesDetailed,
   getTransitions,
   transitionIssue,
   addComment,
@@ -389,4 +450,6 @@ module.exports = {
   commentMarker,
   summaryTags,
   normalizeIssue,
+  is429,
+  retryAfterMs,
 };

@@ -2,7 +2,7 @@
   "jiraKey": "MFC",
   "kind": "app",
   "linkedProfile": "TAC",
-  "enabled": false,
+  "enabled": true,
   "eligibleJql": "project = MFC AND assignee = currentUser() AND status in (\"To Do\",\"Open\",\"Reopened\",\"Ready for Assign\")",
   "transitions": {
     "claim": "In Progress",

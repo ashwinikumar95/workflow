@@ -1,0 +1,13 @@
+---
+description: Testing and verification checklist for Mt-Fuji-Central
+globs: **/*.{vue,js}
+alwaysApply: false
+---
+
+# Testing & Validation Rules
+
+- Keep Central UI changes compatible with `central-ui-automation` (TAC) selectors: `mfc-ejs-tab`, `mfc-ejs-grid`, and existing test ids.
+- Do not rename stable ids, headers, or permission keys without updating the matching automation.
+- Verify the touched screen still loads, filters, pages, and saves.
+- Check the empty, loading, forbidden (`pagePermissions.VIEW`), and error states.
+- Do not leave `test.only` or debug overlays in the app.

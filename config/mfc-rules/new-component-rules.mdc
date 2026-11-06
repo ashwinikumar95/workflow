@@ -1,0 +1,32 @@
+---
+alwaysApply: true
+---
+
+# Vue 3 component rules for Mt-Fuji-Central
+
+## Options API
+
+Use Vue 3 Options API for every new or edited component: `name`, `props`, `data`, `computed`, `watch`, lifecycle hooks, `methods`. Do not use `setup()`, `ref`, or `reactive` unless the ticket asks for Composition API.
+
+## Naming
+
+- Files: kebab-case (`outlet-grid.vue`).
+- `name`: PascalCase (`OutletGrid`).
+- Props, data, and methods: camelCase.
+
+## Screens
+
+- Wrap page content in `main-layout` like sibling views.
+- List screens: `vxceed-grid` plus `vxceed-column-chooser` when the screen has column visibility.
+- Tabbed screens: `vxceed-tabs` with `v-model` and a `tabs` array. Class `mfc-ejs-tab` is fine.
+- Forms: `form-control form-control-sm` / `form-select`, labels via `$t()`, respect `pagePermissions` / `viewOnly`.
+
+## i18n
+
+User-facing strings go through `$t()`. Do not hardcode labels, buttons, or validation text.
+
+## Events and cleanup
+
+- Emit kebab or existing event names already used by the parent.
+- Clear timers, listeners, and modal state on destroy.
+- Do not skip error handling on API calls.

@@ -195,8 +195,33 @@ function emptyProfileReport(profile) {
   };
 }
 
+function searchDepsFor(deps = {}) {
+  const cfg = deps.config || require("../../config");
+  const next = { ...deps };
+  if (!Number.isInteger(next.maxIssues) || next.maxIssues <= 0) {
+    next.maxIssues = cfg.jiraSearchMaxIssues;
+  }
+  if (!Number.isInteger(next.pageDelayMs) || next.pageDelayMs < 0) {
+    next.pageDelayMs = cfg.jiraSearchPageDelayMs;
+  }
+  return next;
+}
+
 async function pollProfile(profile, deps, dryRun, report) {
-  const issues = await jira.searchIssues(profile.eligibleJql, deps);
+  let issues = [];
+  try {
+    issues = await jira.searchIssues(profile.eligibleJql, searchDepsFor(deps));
+    if (issues && issues.truncated) {
+      report.truncated = true;
+      report.truncateReason = issues.reason || "truncated";
+    }
+  } catch (err) {
+    if (jira.is429(err)) {
+      report.rateLimited = true;
+      return;
+    }
+    throw err;
+  }
   for (const issue of issues) {
     const eligibility = assessEligibility(issue, profile, {
       source: "bucket",
@@ -278,4 +303,5 @@ module.exports = {
   startTicket,
   startFromIssue,
   dispatch,
+  searchDepsFor,
 };

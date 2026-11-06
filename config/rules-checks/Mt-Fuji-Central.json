@@ -1,7 +1,52 @@
 {
   "repo": "Mt-Fuji-Central",
-  "enabled": false,
+  "enabled": true,
   "draft": true,
-  "note": "No .cursor/rules yet. Mechanical checks wait for Phase 11.",
-  "checks": []
+  "checks": [
+    {
+      "id": "no-syncfusion-import",
+      "rule": "native-components-rules.mdc",
+      "severity": "high",
+      "globs": ["**/*.{vue,js,ts}"],
+      "pattern": "from\\s+['\"]@syncfusion/",
+      "message": "Do not import @syncfusion packages",
+      "enabled": true
+    },
+    {
+      "id": "no-ejs-tags",
+      "rule": "native-components-rules.mdc",
+      "severity": "high",
+      "globs": ["**/*.{vue,js}"],
+      "pattern": "<ejs-[A-Za-z0-9-]+",
+      "message": "Do not introduce Syncfusion ejs-* tags",
+      "enabled": true
+    },
+    {
+      "id": "no-v-html",
+      "rule": "security-rules.mdc",
+      "severity": "high",
+      "globs": ["**/*.{vue,js}"],
+      "pattern": "\\bv-html\\b",
+      "message": "Do not use v-html without an explicit security-rule exception",
+      "enabled": true
+    },
+    {
+      "id": "no-console-log",
+      "rule": "performance-optimization-rules.mdc",
+      "severity": "medium",
+      "globs": ["src/**"],
+      "pattern": "console\\.log\\s*\\(",
+      "message": "Remove console.log from src",
+      "enabled": true
+    },
+    {
+      "id": "no-dist-edits",
+      "rule": "central-project-rules.mdc",
+      "severity": "high",
+      "globs": ["dist/**"],
+      "pattern": ".",
+      "message": "Do not edit files under dist/",
+      "enabled": true
+    }
+  ]
 }

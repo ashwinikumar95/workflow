@@ -323,6 +323,88 @@ async function recoverExpiredLocks(deps = {}) {
   return released;
 }
 
+function waitKindOf(run) {
+  return run && run.wait && typeof run.wait.kind === "string" ? run.wait.kind : "";
+}
+
+function shouldKillLeftoverRun(run, now) {
+  if (!run) return true;
+  const status = run.status;
+  if (status === "success" || status === "failed" || status === "cancelled" || status === "interrupted") {
+    return true;
+  }
+  if (status === "waiting") {
+    const kind = waitKindOf(run);
+    if (kind === "agent" || kind === "playwright") return false;
+    return true;
+  }
+  if (status === "running") {
+    if (!run.executionClaim) return true;
+    const expires = run.executionClaimExpiresAt ? new Date(run.executionClaimExpiresAt).getTime() : 0;
+    return Number.isFinite(expires) && expires > 0 && expires <= now.getTime();
+  }
+  return false;
+}
+
+async function clearProcessEntries(run, ticket, pids) {
+  const ids = [...new Set((pids || []).filter((pid) => Number.isInteger(pid) && pid > 0))];
+  if (!ids.length) return;
+  if (run && run._id) {
+    await Run.updateOne({ _id: run._id }, { $pull: { "external.processes": { pid: { $in: ids } } } });
+  }
+  if (ticket && ticket._id) {
+    await TicketRun.updateOne({ _id: ticket._id }, { $pull: { processes: { pid: { $in: ids } } } });
+  }
+}
+
+async function cleanupLeftoverProcesses(deps = {}) {
+  const now = deps.now instanceof Date ? deps.now : new Date();
+  const kill = deps.killTree || hostProcess.killTree;
+  const killed = [];
+  const skipped = [];
+  const runs = await Run.find({ "external.processes.0": { $exists: true } }).lean();
+  for (const run of runs) {
+    const ticket = await TicketRun.findOne({ runId: String(run._id) }).lean();
+    if (!shouldKillLeftoverRun(run, now)) {
+      skipped.push(String(run._id));
+      continue;
+    }
+    const recorded = processesOf(run, ticket);
+    const pids = [];
+    for (const entry of recorded) {
+      if (isPidAlive(entry.pid)) await kill(entry.pid);
+      pids.push(entry.pid);
+      killed.push({ runId: String(run._id), pid: entry.pid, role: entry.role });
+    }
+    await clearProcessEntries(run, ticket, pids);
+  }
+
+  const tickets = await TicketRun.find({ "processes.0": { $exists: true } }).lean();
+  for (const ticket of tickets) {
+    let run = null;
+    try {
+      run = ticket.runId ? await Run.findById(ticket.runId).lean() : null;
+    } catch {
+      run = null;
+    }
+    if (run && !shouldKillLeftoverRun(run, now)) continue;
+    if (!run && ticketState.isTerminal(ticket.state) === false && ticket.state !== "interrupted") {
+      continue;
+    }
+    const recorded = processesOf(run, ticket);
+    const pids = [];
+    for (const entry of recorded) {
+      if (killed.some((item) => item.pid === entry.pid && item.runId === String(ticket.runId))) continue;
+      if (isPidAlive(entry.pid)) await kill(entry.pid);
+      pids.push(entry.pid);
+      killed.push({ runId: String(ticket.runId), pid: entry.pid, role: entry.role });
+    }
+    await clearProcessEntries(run, ticket, pids);
+  }
+
+  return { killed, skipped };
+}
+
 async function recoverStale(deps = {}) {
   const released = await recoverExpiredLocks({ ...deps, skipTicketRecovery: true });
   const live = await TicketRun.find({
@@ -350,4 +432,6 @@ module.exports = {
   recoverTicket,
   recoverExpiredLocks,
   recoverStale,
+  shouldKillLeftoverRun,
+  cleanupLeftoverProcesses,
 };

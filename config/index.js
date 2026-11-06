@@ -91,6 +91,21 @@ module.exports = {
     if (process.env.JIRA_DISPATCH_CRON === "") return "";
     return process.env.JIRA_DISPATCH_CRON || "*/5 * * * *";
   },
+  /**
+   * Cap on issues pulled per profile per dispatcher poll. A large bucket is
+   * truncated rather than walked until Jira rate-limits the worker.
+   */
+  get jiraSearchMaxIssues() {
+    return parsePositiveInt(process.env.JIRA_SEARCH_MAX_ISSUES, 200);
+  },
+  /**
+   * Pause between Jira search pages. `0` disables the pause (tests).
+   */
+  get jiraSearchPageDelayMs() {
+    const raw = process.env.JIRA_SEARCH_PAGE_DELAY_MS;
+    if (raw !== undefined && String(raw).trim() === "0") return 0;
+    return parsePositiveInt(raw, 100);
+  },
   get analysisBaseUrl() {
     return process.env.ANALYSIS_BASE_URL || "";
   },

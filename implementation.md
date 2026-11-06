@@ -469,6 +469,10 @@ test/                                   node:test files, one area per phase
 3. Phase 3 services and nodes in graph order: Jira, analysis, prompt, git, agent, Playwright, pull request.
 4. Split processes and turn on `SCHEDULER_ENABLED` only for the API.
 
+## Jira-to-PR project automation
+
+The engine in this file is generic. Profiles, host runtime, ticket locks, Jira intake, Slack, rules, Playwright selection, and the MF/MFC/QUT/TAC templates are built in [docs/jira-pr-automation/implementation.md](docs/jira-pr-automation/implementation.md).
+
 A phase is closed by its tests, not by the files existing. This document does not mark any phase complete.
 
 Repository location, Playwright strategy, and `config.target` are decided in `architecture.md` section 15 item 4. Phase 3 stays blocked on the preflight recorded at the end of that section: deploy-host container limits, Cursor SDK egress hosts, a digest-pinned Playwright image, a captured Jira `eventId`, and a verified preview deployment. Those values are not invented here. No phase in this document is marked complete.

@@ -1,0 +1,6 @@
+---
+description: Performance optimization standards
+globs: **/*.{vue,js}
+alwaysApply: false
+---
+Remove console.log from production code.
