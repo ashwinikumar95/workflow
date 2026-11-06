@@ -35,7 +35,13 @@ app.get("/", (req, res) => {
 
 mongoose
   .connect(config.mongodbUri)
-  .then(() => {
+  .then(async () => {
+    try {
+      const { seedDraftWorkflows } = require("./src/services/workflowSeed");
+      await seedDraftWorkflows();
+    } catch (err) {
+      console.error("[workflow-seed] failed:", err && err.message ? err.message : err);
+    }
     app.listen(config.port, () => {
       console.log(`Server listening on http://localhost:${config.port}`);
     });

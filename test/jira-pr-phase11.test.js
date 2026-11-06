@@ -355,7 +355,15 @@ describe("jira-pr phase 11 MFC and hardening", () => {
       profileKey: "MF",
       nodes: [{ id: "start", type: "delay", config: { seconds: 0 } }],
       edges: [],
-      trigger: { type: "cron", enabled: true, config: { cron: "*/5 * * * *" } },
+      trigger: { type: "cron", enabled: true, config: { cron: "*/5 * * * *", intake: "bucket", profileKeys: ["MF"] } },
+    });
+    await Workflow.create({
+      name: "MFC pipeline",
+      status: "published",
+      profileKey: "MFC",
+      nodes: [{ id: "start", type: "delay", config: { seconds: 0 } }],
+      edges: [],
+      trigger: { type: "cron", enabled: true, config: { cron: "*/5 * * * *", intake: "bucket", profileKeys: ["MFC"] } },
     });
     const enqueued = [];
     const http = {

@@ -65,6 +65,53 @@ function nodeRepository(node) {
   return null;
 }
 
+function isManualIntake(workflow) {
+  return Boolean(
+    workflow && workflow.trigger && workflow.trigger.config && workflow.trigger.config.intake === "manual"
+  );
+}
+
+function profileByRole(input, role) {
+  const profile = profileFromInput(input);
+  if (!profile) return null;
+  let linked = null;
+  try {
+    const profiles = parseProfiles();
+    linked = profile.linkedProfile ? profiles[profile.linkedProfile] : null;
+  } catch {
+    linked = null;
+  }
+  if (role === "automation") return profile.kind === "automation" ? profile : linked;
+  if (role === "app") return profile.kind === "app" ? profile : linked;
+  return profile;
+}
+
+function repositoryFromEditor(profile) {
+  if (!profile || !profile.repo) return null;
+  return {
+    location: profile.repo.location,
+    defaultBranch: profile.repo.defaultBranch,
+    credentialRef: profile.repo.credentialRef,
+    owner: profile.repo.github && profile.repo.github.owner,
+    repo: profile.repo.github && profile.repo.github.repo,
+  };
+}
+
+function repositoryForNode(node, input, workflow) {
+  if (isManualIntake(workflow)) {
+    const editor = profileByRole(input, nodeRole(node) || "app");
+    const resolved = repositoryFromEditor(editor);
+    if (resolved) return resolved;
+  }
+  return nodeRepository(node);
+}
+
+function appNameForProfile(profile) {
+  const key = profile && profile.jiraKey;
+  if (key === "MFC" || key === "TAC") return "central";
+  return "fuji";
+}
+
 function nodeRole(node) {
   const role = node && node.config && node.config.role;
   if (role === "app" || role === "automation") return role;
@@ -140,7 +187,10 @@ function rulesRoot(node, input, runState) {
   const active = externalFor(runState, role);
   if (active.worktreePath) return active.worktreePath;
   if (input && typeof input.worktreePath === "string" && input.worktreePath) return input.worktreePath;
-  const location = optionalRepoLocation(runState && runState.workflow, nodeRepository(node));
+  const location = optionalRepoLocation(
+    runState && runState.workflow,
+    repositoryForNode(node, input, runState && runState.workflow)
+  );
   return location || "";
 }
 
@@ -285,10 +335,15 @@ async function cursorPromptNode(node, input, runState) {
   const repoRoot = rulesRoot(node, base, runState);
   let manifest = base.rulesManifest;
   if (repoRoot && fs.existsSync(repoRoot)) {
+    const named = rulesService.rulesMentionedInTicket(base.jira || {}, repoRoot);
+    const forced = [
+      ...((profile && profile.rules && profile.rules.forceInclude) || []),
+      ...named,
+    ];
     manifest = rulesService.buildManifest({
       repoRoot,
       plannedFiles: plannedFilesFrom(base),
-      forceInclude: profile && profile.rules ? profile.rules.forceInclude : [],
+      forceInclude: forced,
       extraDocs: profile && profile.rules ? profile.rules.extraDocs : [],
     });
   }
@@ -348,7 +403,7 @@ async function cursorPromptNode(node, input, runState) {
 
 async function gitBranchNode(node, input, runState) {
   const base = asObject(input);
-  const repository = nodeRepository(node);
+  const repository = repositoryForNode(node, base, runState.workflow);
   const role = nodeRole(node);
   const cfg = node && node.config && typeof node.config === "object" ? node.config : {};
   const repoPath = git.resolveRepoPath(runState.workflow, repository);
@@ -369,7 +424,13 @@ async function gitBranchNode(node, input, runState) {
         baseBranch,
         worktreesDir: config.worktreesDir,
       });
-  const credentialFiles = Array.isArray(cfg.credentialFiles) ? cfg.credentialFiles : [];
+  let credentialFiles = Array.isArray(cfg.credentialFiles) ? cfg.credentialFiles : [];
+  if (isManualIntake(runState.workflow)) {
+    const editor = profileByRole(base, role || "app");
+    if (editor && Array.isArray(editor.repo.credentialFiles)) {
+      credentialFiles = editor.repo.credentialFiles;
+    }
+  }
   if (credentialFiles.length) {
     const { copyCredentialFiles } = require("../services/hostRunners");
     const copied = await copyCredentialFiles({
@@ -715,19 +776,45 @@ async function playwrightNode(node, input, runState) {
   }
   const external = Object.keys(shaPatch.repos).length ? shaPatch : { testedSha: ready.head, worktreePath: changedPath, worktreeState: "ready" };
   if (runState.checkpointExternal) await runState.checkpointExternal(external);
-  const sourceRepoPath =
+  const testSelect = require("../services/testSelect");
+  const selection = base.selection && typeof base.selection === "object" ? base.selection : null;
+  const profile = profileFromInput(base);
+  const appProfile = isManualIntake(runState.workflow) ? profileByRole(base, "app") : null;
+  const autoProfile = isManualIntake(runState.workflow) ? profileByRole(base, "automation") : null;
+  let sourceRepoPath =
     typeof cfg.sourceRepoPath === "string" && cfg.sourceRepoPath
       ? cfg.sourceRepoPath
       : cfg.strategy === "in-repo"
-        ? optionalRepoLocation(runState.workflow, nodeRepository(node))
-        : testRepository.location || optionalRepoLocation(runState.workflow, nodeRepository(node));
-  const testSelect = require("../services/testSelect");
-  const selection = base.selection && typeof base.selection === "object" ? base.selection : null;
-  const testCommand = testSelect.appendSelection(
+        ? optionalRepoLocation(runState.workflow, repositoryForNode(node, base, runState.workflow))
+        : testRepository.location || optionalRepoLocation(runState.workflow, repositoryForNode(node, base, runState.workflow));
+  let testCommand = testSelect.appendSelection(
     Array.isArray(cfg.testCommand) ? cfg.testCommand : [],
     selection
   );
-  const profile = profileFromInput(base);
+  let appCommand = Array.isArray(cfg.appCommand) ? cfg.appCommand : [];
+  let readiness = cfg.readiness || "/";
+  let credentialFiles = Array.isArray(cfg.credentialFiles) ? cfg.credentialFiles : [];
+  let appCredentialFiles = Array.isArray(cfg.appCredentialFiles) ? cfg.appCredentialFiles : [];
+  let appSourceRepoPath = typeof cfg.appSourceRepoPath === "string" ? cfg.appSourceRepoPath : "";
+  let app = typeof cfg.app === "string" ? cfg.app : "";
+  let resolvedTestWorktree = testWorktree;
+  if (appProfile) {
+    appCommand = Array.isArray(appProfile.repo.appCommand) ? appProfile.repo.appCommand : [];
+    readiness = appProfile.repo.readiness || "/";
+    appCredentialFiles = Array.isArray(appProfile.repo.credentialFiles) ? appProfile.repo.credentialFiles : [];
+    appSourceRepoPath = appProfile.repo.location;
+    app = appNameForProfile(appProfile);
+  }
+  if (autoProfile) {
+    testCommand = testSelect.appendSelection(
+      Array.isArray(autoProfile.repo.testCommand) ? autoProfile.repo.testCommand : [],
+      selection
+    );
+    credentialFiles = Array.isArray(autoProfile.repo.credentialFiles) ? autoProfile.repo.credentialFiles : [];
+    sourceRepoPath = autoProfile.repo.location;
+    resolvedTestWorktree =
+      autoExt.worktreePath || (cfg.strategy === "in-repo" ? changedPath : autoProfile.repo.location);
+  }
   const ticketKind =
     cfg.ticketKind === "automation" || cfg.ticketKind === "app"
       ? cfg.ticketKind
@@ -761,21 +848,21 @@ async function playwrightNode(node, input, runState) {
       testedWorktree: changedPath,
       appWorktree,
       worktreePath: changedPath,
-      testWorktree,
+      testWorktree: resolvedTestWorktree,
       testPath: typeof cfg.testPath === "string" ? cfg.testPath : "",
-      appCommand: Array.isArray(cfg.appCommand) ? cfg.appCommand : [],
-      readiness: cfg.readiness || "/",
+      appCommand,
+      readiness,
       testCommand,
       selection,
       ticketKind,
       baseSha,
       baselineRepoPath,
       baseline: cfg.baseline === true,
-      credentialFiles: Array.isArray(cfg.credentialFiles) ? cfg.credentialFiles : [],
+      credentialFiles,
       sourceRepoPath,
-      appCredentialFiles: Array.isArray(cfg.appCredentialFiles) ? cfg.appCredentialFiles : [],
-      appSourceRepoPath: typeof cfg.appSourceRepoPath === "string" ? cfg.appSourceRepoPath : "",
-      app: typeof cfg.app === "string" ? cfg.app : "",
+      appCredentialFiles,
+      appSourceRepoPath,
+      app,
       preAgentSha,
       runtime: nodeRuntime(node, runState),
     },
@@ -785,7 +872,7 @@ async function playwrightNode(node, input, runState) {
 async function githubPrNode(node, input, runState) {
   const base = asObject(input);
   const role = nodeRole(node);
-  const repository = nodeRepository(node);
+  const repository = repositoryForNode(node, base, runState.workflow);
   const external = externalFor({ ...runState, node }, role);
   if (external.detached || !external.branch) {
     throw new Error("Cannot open a pull request from a detached worktree");
@@ -885,4 +972,6 @@ module.exports = {
   testSelect: testSelectNode,
   playwright: playwrightNode,
   githubPr: githubPrNode,
+  repositoryForNode,
+  isManualIntake,
 };

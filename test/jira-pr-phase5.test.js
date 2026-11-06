@@ -145,13 +145,18 @@ function createFakeJira(seed = {}) {
 }
 
 async function makeWorkflow(profileKey) {
+  const config = { cron: "*/5 * * * *" };
+  if (profileKey === "MF" || profileKey === "MFC") {
+    config.intake = "bucket";
+    config.profileKeys = [profileKey];
+  }
   return Workflow.create({
     name: `${profileKey} pipeline`,
     status: "published",
     profileKey,
     nodes: [{ id: "start", type: "delay", config: { seconds: 0 } }],
     edges: [],
-    trigger: { type: "cron", enabled: true, config: { cron: "*/5 * * * *" } },
+    trigger: { type: "cron", enabled: true, config },
   });
 }
 
