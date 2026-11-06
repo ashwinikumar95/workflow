@@ -13,11 +13,15 @@ export async function runSandbox({
   prompt,
   agentExecutionId,
   writeReceipt,
+  settingSources,
 }) {
   const agent = await Agent.create({
     apiKey,
     model: { id: modelId || process.env.CURSOR_MODEL || "composer-2.5" },
-    local: { cwd, settingSources: [] },
+    local: {
+      cwd,
+      settingSources: Array.isArray(settingSources) ? settingSources : [],
+    },
   });
   try {
     const run = await agent.send(prompt);

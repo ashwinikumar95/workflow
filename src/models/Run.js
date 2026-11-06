@@ -9,7 +9,7 @@ const runSchema = new mongoose.Schema({
 
   status: {
     type: String,
-    enum: ["running", "success", "failed", "waiting"],
+    enum: ["running", "success", "failed", "waiting", "interrupted", "cancelled"],
     default: "running"
   },
 

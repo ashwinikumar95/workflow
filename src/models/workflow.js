@@ -54,6 +54,11 @@ const workflowSchema = new mongoose.Schema({
     defaultBranch: String,
     credentialRef: String,
   },
+
+  retention: {
+    keepWorktreeOnFailure: { type: Boolean, default: false },
+    worktreeDays: { type: Number, default: 7 },
+  },
 }, { timestamps: true });
 
 module.exports =

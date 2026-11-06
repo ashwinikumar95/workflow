@@ -1,3 +1,4 @@
+const path = require("path");
 const { calculateObjectSize } = require("bson");
 const { v4: uuidv4 } = require("uuid");
 const Workflow = require("../models/workflow");
@@ -140,16 +141,56 @@ async function persistRun(runId, token, patch) {
 
 function externalPipeline(setDoc, external) {
   const pipeline = [{ $set: setDoc }];
-  if (external && typeof external === "object" && !Array.isArray(external)) {
+  if (!external || typeof external !== "object" || Array.isArray(external)) return pipeline;
+  const repos = external.repos;
+  const rest = { ...external };
+  delete rest.repos;
+  if (Object.keys(rest).length > 0) {
     pipeline.push({
       $set: {
         external: {
-          $mergeObjects: [{ $ifNull: ["$external", {}] }, { $literal: external }],
+          $mergeObjects: [{ $ifNull: ["$external", {}] }, { $literal: rest }],
         },
       },
     });
   }
+  if (repos && typeof repos === "object" && !Array.isArray(repos)) {
+    for (const role of ["app", "automation"]) {
+      const entry = repos[role];
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+      pipeline.push({
+        $set: {
+          [`external.repos.${role}`]: {
+            $mergeObjects: [
+              { $ifNull: [`$external.repos.${role}`, {}] },
+              { $literal: entry },
+            ],
+          },
+        },
+      });
+    }
+  }
   return pipeline;
+}
+
+function cloneExternal(external) {
+  if (!external || typeof external !== "object" || Array.isArray(external)) return {};
+  const source = typeof external.toObject === "function" ? external.toObject() : external;
+  const copy = { ...source };
+  if (source.repos && typeof source.repos === "object" && !Array.isArray(source.repos)) {
+    copy.repos = {};
+    for (const role of Object.keys(source.repos)) {
+      const entry = source.repos[role];
+      copy.repos[role] =
+        entry && typeof entry === "object" && !Array.isArray(entry) ? { ...entry } : entry;
+    }
+  }
+  return copy;
+}
+
+function replaceExternal(target, external) {
+  for (const key of Object.keys(target)) delete target[key];
+  Object.assign(target, cloneExternal(external));
 }
 
 const NODE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -295,6 +336,12 @@ function approvalResumeState(run, node) {
   const decision = run.approval && run.approval.decision;
   if (decision !== "approved" && decision !== "rejected") return undefined;
   return { decision };
+}
+
+function attemptsFor(node) {
+  const raw = node && node.config && node.config.retries;
+  if (typeof raw === "number" && Number.isInteger(raw) && raw >= 1) return raw;
+  return 3;
 }
 
 async function executeWithRetry(node, input, retries = 3, runState) {
@@ -509,17 +556,43 @@ async function enqueueExternalJob(saved, output) {
   }
 }
 
-async function cleanupWorktree(runId) {
+function worktreeTargets(external) {
+  const targets = [];
+  const push = (entry) => {
+    if (!entry || !entry.worktreePath || !entry.repoPath) return;
+    const resolved = path.resolve(entry.worktreePath);
+    if (targets.some((item) => item.resolved === resolved)) return;
+    targets.push({
+      resolved,
+      worktreePath: entry.worktreePath,
+      repoPath: entry.repoPath,
+    });
+  };
+  if (external && typeof external === "object") {
+    push(external);
+    if (external.repos && typeof external.repos === "object") {
+      for (const entry of Object.values(external.repos)) push(entry);
+    }
+  }
+  return targets;
+}
+
+async function cleanupWorktree(runId, workflow) {
+  const git = require("./gitService");
+  if (git.keepsWorktreeOnFailure(workflow)) return;
   try {
     const row = await Run.findById(runId);
-    const external = row && row.external;
-    if (!external || !external.worktreePath || !external.repoPath) return;
-    const git = require("./gitService");
-    await git.removeWorktree({
-      repoPath: external.repoPath,
-      worktreePath: external.worktreePath,
-      worktreesDir: config.worktreesDir,
-    });
+    for (const target of worktreeTargets(row && row.external)) {
+      try {
+        await git.removeWorktree({
+          repoPath: target.repoPath,
+          worktreePath: target.worktreePath,
+          worktreesDir: config.worktreesDir,
+        });
+      } catch (err) {
+        console.error("[executeWorkflow] worktree remove failed:", err.message);
+      }
+    }
   } catch (err) {
     console.error("[executeWorkflow] worktree remove failed:", err.message);
   }
@@ -530,10 +603,7 @@ async function walkClaimed(workflow, run, token, position, leaseMs) {
   let currentInput = position.input;
   let isFirstNode = true;
   let predecessorId = null;
-  const externalState =
-    run.external && typeof run.external === "object" && !Array.isArray(run.external)
-      ? { ...run.external }
-      : {};
+  const externalState = cloneExternal(run.external);
 
   while (currentNode) {
     if (!isFirstNode) {
@@ -559,6 +629,7 @@ async function walkClaimed(workflow, run, token, position, leaseMs) {
       workflowId: String(workflow._id),
       nodeId: currentNode.id,
       workflow,
+      node: currentNode,
       predecessorId,
       external: externalState,
       resumed,
@@ -572,13 +643,20 @@ async function walkClaimed(workflow, run, token, position, leaseMs) {
           external,
         });
         if (!saved) throw claimBusy();
-        Object.assign(externalState, external);
+        if (saved.external && typeof saved.external === "object") {
+          replaceExternal(externalState, saved.external);
+        }
       },
     };
     let output;
     let thrown = null;
     try {
-      output = await executeWithRetry(currentNode, currentInput, 3, runState);
+      output = await executeWithRetry(
+        currentNode,
+        currentInput,
+        attemptsFor(currentNode),
+        runState
+      );
     } catch (err) {
       thrown = err;
     } finally {
@@ -601,7 +679,7 @@ async function walkClaimed(workflow, run, token, position, leaseMs) {
         },
       });
       if (!failed) throw claimBusy();
-      await cleanupWorktree(run._id);
+      await cleanupWorktree(run._id, workflow);
       await maybeNotifyRunFailure(workflow._id, thrown.message);
       throw thrown;
     }

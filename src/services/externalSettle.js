@@ -1,6 +1,6 @@
 const Run = require("../models/Run");
 const git = require("./gitService");
-const { classifyAgentTree } = require("./agentAttempt");
+const { classifyAgentTree, defaultInspect } = require("./agentAttempt");
 
 function withBranch(data, branch, extra) {
   const result = { ...(data.result || {}), ...(extra || {}), branch };
@@ -24,20 +24,9 @@ async function prepareExternalSettle(data) {
     if (!worktree || !preAgentSha) return withBranch(data, "false");
     let observed;
     try {
-      const head = await git.revParse(worktree);
-      const clean = await git.isClean(worktree);
-      const descendant = await git.isAncestor(preAgentSha, head, worktree);
-      const diffEmpty = await git.diffIsEmpty(preAgentSha, head, worktree);
-      observed = {
-        clean,
-        head,
-        preAgentSha,
-        descendant,
-        diffEmpty,
-        hasReceipt: false,
-        containerRunning: false,
-        sdkStatus: data.result && data.result.status,
-      };
+      observed = await defaultInspect(worktree, preAgentSha);
+      observed.containerRunning = false;
+      observed.sdkStatus = data.result && data.result.status ? data.result.status : null;
     } catch {
       return withBranch(data, "false");
     }

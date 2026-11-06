@@ -12,8 +12,35 @@ function asObject(input) {
   return { payload: input };
 }
 
-function tokenFromWorkflow(workflow) {
-  const ref = workflow && workflow.repository && workflow.repository.credentialRef;
+function nodeRepository(node) {
+  const repo = node && node.config && node.config.repository;
+  if (repo && typeof repo === "object" && !Array.isArray(repo)) return repo;
+  return null;
+}
+
+function nodeRole(node) {
+  const role = node && node.config && node.config.role;
+  if (role === "app" || role === "automation") return role;
+  return "";
+}
+
+function externalFor(runState, role) {
+  const external = runState && runState.external ? runState.external : {};
+  if (!role) return external;
+  const entry = external.repos && external.repos[role];
+  if (entry && typeof entry === "object" && !Array.isArray(entry)) return entry;
+  return {};
+}
+
+function externalPatch(role, fields) {
+  if (!role) return fields;
+  return { repos: { [role]: fields } };
+}
+
+function tokenFromWorkflow(workflow, repository) {
+  const ref =
+    (repository && typeof repository.credentialRef === "string" && repository.credentialRef) ||
+    (workflow && workflow.repository && workflow.repository.credentialRef);
   if (typeof ref === "string" && ref && Object.prototype.hasOwnProperty.call(process.env, ref)) {
     return process.env[ref];
   }
@@ -21,10 +48,14 @@ function tokenFromWorkflow(workflow) {
 }
 
 async function removeQuiet(runState) {
-  const external = runState && runState.external ? runState.external : {};
+  if (git.keepsWorktreeOnFailure(runState && runState.workflow)) return;
+  const role = nodeRole(runState && runState.node);
+  const external = externalFor(runState, role);
   if (!external.worktreePath || !external.repoPath) return;
   try {
-    if (runState.checkpointExternal) await runState.checkpointExternal({ worktreeState: "removing" });
+    if (runState.checkpointExternal) {
+      await runState.checkpointExternal(externalPatch(role, { worktreeState: "removing" }));
+    }
     await git.removeWorktree({
       repoPath: external.repoPath,
       worktreePath: external.worktreePath,
@@ -58,48 +89,53 @@ async function cursorPromptNode(_node, input) {
   return { ...base, prompt };
 }
 
-async function gitBranchNode(_node, input, runState) {
+async function gitBranchNode(node, input, runState) {
   const base = asObject(input);
+  const repository = nodeRepository(node);
+  const role = nodeRole(node);
   const created = await git.createWorktree({
-    repoPath: git.resolveRepoPath(runState.workflow),
+    repoPath: git.resolveRepoPath(runState.workflow, repository),
     runId: runState.runId,
     nodeId: runState.nodeId,
     issueKey: base.jira && base.jira.key,
-    baseBranch: git.resolveBaseBranch(runState.workflow),
+    baseBranch: git.resolveBaseBranch(runState.workflow, repository),
     worktreesDir: config.worktreesDir,
   });
-  const external = {
+  const fields = {
     worktreePath: created.path,
     branch: created.branch,
     repoPath: created.repoPath,
     worktreeState: "ready",
   };
-  if (runState.checkpointExternal) await runState.checkpointExternal(external);
+  if (runState.checkpointExternal) await runState.checkpointExternal(externalPatch(role, fields));
   return { ...base, worktreePath: created.path, branch: created.branch };
 }
 
-async function cursorAgentNode(_node, input, runState) {
+async function cursorAgentNode(node, input, runState) {
   const base = asObject(input);
+  const role = nodeRole(node);
+  const state = { ...runState, node };
   if (runState.resumed) {
     const branch = runState.completion && runState.completion.branch === "true" ? "true" : "false";
-    if (branch === "false") await removeQuiet(runState);
+    if (branch === "false") await removeQuiet(state);
     const result = runState.completion && runState.completion.result;
     return { ...base, branch, headSha: result && result.sha ? result.sha : null };
   }
-  const worktreePath = (runState.external && runState.external.worktreePath) || base.worktreePath;
+  const active = externalFor(state, role);
+  const worktreePath = role ? active.worktreePath : active.worktreePath || base.worktreePath;
   const head = await git.revParse(worktreePath);
   const clean = await git.isClean(worktreePath);
   if (!clean) {
-    await removeQuiet(runState);
+    await removeQuiet(state);
     return { ...base, branch: "false" };
   }
   const agentExecutionId = uuidv4();
-  const external = {
+  const external = externalPatch(role, {
     agentExecutionId,
     preAgentSha: head,
     worktreePath,
     worktreeState: "ready",
-  };
+  });
   if (runState.checkpointExternal) await runState.checkpointExternal(external);
   const externalJobId = `agent-${runState.runId}-${runState.nodeId}`;
   return {
@@ -123,9 +159,11 @@ async function cursorAgentNode(_node, input, runState) {
 async function playwrightNode(node, input, runState) {
   const base = asObject(input);
   const cfg = node.config && typeof node.config === "object" ? node.config : {};
+  const role = nodeRole(node);
+  const state = { ...runState, node };
   if (runState.resumed) {
     const branch = runState.completion && runState.completion.branch === "true" ? "true" : "false";
-    if (branch === "false") await removeQuiet(runState);
+    if (branch === "false") await removeQuiet(state);
     return { ...base, branch };
   }
   if (cfg.strategy !== "in-repo" && cfg.strategy !== "external-repo") {
@@ -134,14 +172,15 @@ async function playwrightNode(node, input, runState) {
   if (cfg.target !== "local-worktree" && cfg.target !== "deployed-preview") {
     throw new Error("Playwright target is required");
   }
-  const worktreePath = (runState.external && runState.external.worktreePath) || base.worktreePath;
-  const preAgentSha = runState.external && runState.external.preAgentSha;
+  const active = externalFor(state, role);
+  const worktreePath = role ? active.worktreePath : active.worktreePath || base.worktreePath;
+  const preAgentSha = active.preAgentSha;
   const ready = await git.readyForPlaywright(worktreePath, preAgentSha);
   if (!ready.ok) {
-    await removeQuiet(runState);
+    await removeQuiet(state);
     return { ...base, branch: "false" };
   }
-  const external = { testedSha: ready.head, worktreePath, worktreeState: "ready" };
+  const external = externalPatch(role, { testedSha: ready.head, worktreePath, worktreeState: "ready" });
   if (runState.checkpointExternal) await runState.checkpointExternal(external);
   const testRepository = cfg.testRepository && typeof cfg.testRepository === "object" ? cfg.testRepository : {};
   return {
@@ -169,12 +208,19 @@ async function playwrightNode(node, input, runState) {
   };
 }
 
-async function githubPrNode(_node, input, runState) {
+async function githubPrNode(node, input, runState) {
   const base = asObject(input);
-  const external = runState.external || {};
+  const role = nodeRole(node);
+  const repository = nodeRepository(node);
+  const external = externalFor({ ...runState, node }, role);
   const head = await git.revParse(external.worktreePath);
-  assertPullRequestGate({ external, predecessorId: runState.predecessorId, head });
-  const token = tokenFromWorkflow(runState.workflow);
+  assertPullRequestGate({
+    external: runState.external,
+    predecessorId: runState.predecessorId,
+    head,
+    role,
+  });
+  const token = tokenFromWorkflow(runState.workflow, repository);
   await git.pushBranch({
     worktreePath: external.worktreePath,
     branch: external.branch,
@@ -182,15 +228,17 @@ async function githubPrNode(_node, input, runState) {
     token,
   });
   const url = await githubPrService.openPullRequest({
-    owner: config.githubOwner,
-    repo: config.githubRepo,
+    owner: (repository && repository.owner) || config.githubOwner,
+    repo: (repository && repository.repo) || config.githubRepo,
     title: (base.jira && base.jira.summary) || external.branch,
     head: external.branch,
-    base: git.resolveBaseBranch(runState.workflow),
+    base: git.resolveBaseBranch(runState.workflow, repository),
     body: "",
     token,
   });
-  if (runState.checkpointExternal) await runState.checkpointExternal({ prUrl: url, worktreeState: "removing" });
+  if (runState.checkpointExternal) {
+    await runState.checkpointExternal(externalPatch(role, { prUrl: url, worktreeState: "removing" }));
+  }
   try {
     await git.removeWorktree({
       repoPath: external.repoPath,

@@ -24,18 +24,38 @@ function classifyAgentTree(observed) {
   return { action: "settle", branch: "false" };
 }
 
+function agentReceiptPath(worktreesDir, runId) {
+  const id = String(runId || "");
+  if (!/^[a-f0-9]{24}$/.test(id)) throw new Error("Run id must be 24 hex characters");
+  return path.join(worktreesDir, id, "receipts", "agent-execution.json");
+}
+
+function receiptPathForWorktree(worktreePath) {
+  if (!worktreePath) return "";
+  const resolved = path.resolve(worktreePath);
+  const match = /^([a-f0-9]{24})-[A-Za-z0-9_-]{1,64}$/.exec(path.basename(resolved));
+  if (!match) return "";
+  return agentReceiptPath(path.dirname(resolved), match[1]);
+}
+
+async function fileExists(file) {
+  if (!file) return false;
+  try {
+    await fs.promises.access(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function defaultInspect(worktreePath, preAgentSha) {
   const head = await git.revParse(worktreePath);
   const clean = await git.isClean(worktreePath);
   const descendant = await git.isAncestor(preAgentSha, head, worktreePath);
   const diffEmpty = await git.diffIsEmpty(preAgentSha, head, worktreePath);
-  let hasReceipt = false;
-  try {
-    await fs.promises.access(path.join(worktreePath, ".workflow", "agent-execution.json"));
-    hasReceipt = true;
-  } catch {
-    hasReceipt = false;
-  }
+  const hasReceipt =
+    (await fileExists(receiptPathForWorktree(worktreePath))) ||
+    (await fileExists(path.join(worktreePath, ".workflow", "agent-execution.json")));
   return {
     clean,
     head,
@@ -144,4 +164,10 @@ async function handleAgentJob(job, deps) {
   }
 }
 
-module.exports = { classifyAgentTree, handleAgentJob, defaultInspect };
+module.exports = {
+  classifyAgentTree,
+  handleAgentJob,
+  defaultInspect,
+  agentReceiptPath,
+  receiptPathForWorktree,
+};

@@ -192,7 +192,15 @@ async function readyForPlaywright(worktreePath, preAgentSha) {
   return { ok: true, head };
 }
 
-function resolveRepoPath(workflow) {
+function resolveRepoPath(workflow, repository) {
+  if (repository && typeof repository.location === "string" && repository.location.trim()) {
+    const location = repository.location.trim();
+    if (fs.existsSync(location)) {
+      const stats = fs.statSync(location);
+      if (stats.isDirectory()) return path.resolve(location);
+    }
+    throw new Error("Functional repository is not available on this worker");
+  }
   const location = workflow && workflow.repository && workflow.repository.location;
   if (typeof location === "string" && location && fs.existsSync(location)) {
     const stats = fs.statSync(location);
@@ -204,11 +212,24 @@ function resolveRepoPath(workflow) {
   throw new Error("Functional repository is not available on this worker");
 }
 
-function resolveBaseBranch(workflow) {
+function resolveBaseBranch(workflow, repository) {
+  if (repository && typeof repository.defaultBranch === "string" && repository.defaultBranch.trim()) {
+    return repository.defaultBranch.trim();
+  }
   const configured = workflow && workflow.repository && workflow.repository.defaultBranch;
   if (typeof configured === "string" && configured.trim()) return configured.trim();
   if (config.gitBaseBranch) return config.gitBaseBranch;
   throw new Error("Functional repository default branch is not set");
+}
+
+function keepsWorktreeOnFailure(workflow) {
+  return Boolean(workflow && workflow.retention && workflow.retention.keepWorktreeOnFailure === true);
+}
+
+function retentionMs(workflow) {
+  const days = workflow && workflow.retention && workflow.retention.worktreeDays;
+  const count = typeof days === "number" && Number.isFinite(days) && days > 0 ? days : 7;
+  return count * 24 * 60 * 60 * 1000;
 }
 
 async function createWorktree({ repoPath, runId, nodeId, issueKey, baseBranch, worktreesDir }) {
@@ -269,6 +290,44 @@ async function createWorktree({ repoPath, runId, nodeId, issueKey, baseBranch, w
     throw new Error("Created worktree resolved outside WORKTREES_DIR");
   }
   return { path: created, branch, repoPath: repoReal };
+}
+
+async function openExistingWorktree({ repoPath, runId, nodeId, issueKey, worktreesDir }) {
+  const segment = segmentFor(runId, nodeId);
+  const branch = branchForRun(issueKey, runId);
+  const base = await realDir(worktreesDir || config.worktreesDir);
+  const candidate = path.resolve(base, segment);
+  if (escapes(base, candidate)) {
+    const err = new Error("Worktree path escapes WORKTREES_DIR");
+    err.code = "WORKTREE_PATH";
+    throw err;
+  }
+  const stats = await refuseLink(candidate);
+  if (!stats || !stats.isDirectory()) {
+    const err = new Error("Existing worktree is missing");
+    err.code = "WORKTREE_MISSING";
+    throw err;
+  }
+  const real = await fs.promises.realpath(candidate);
+  const repoReal = await fs.promises.realpath(repoPath);
+  if (escapes(base, real) || isInside(repoReal, real)) {
+    const err = new Error("Existing worktree path failed the realpath check");
+    err.code = "WORKTREE_PATH";
+    throw err;
+  }
+  const registered = await porcelainPaths(repoPath);
+  let current = "";
+  try {
+    current = await abbrevHead(real);
+  } catch {
+    current = "";
+  }
+  if (!registered.includes(real) || current !== branch) {
+    const err = new Error("Existing worktree is not the registered branch");
+    err.code = "WORKTREE_MISMATCH";
+    throw err;
+  }
+  return { path: real, branch, repoPath: repoReal };
 }
 
 async function removeWorktree({ repoPath, worktreePath, worktreesDir }) {
@@ -378,6 +437,19 @@ async function findEscapingSymlink(root) {
   return walk(root);
 }
 
+async function keepReconciledWorktree(run) {
+  if (!run) return false;
+  if (run.status === "running" || run.status === "waiting") return true;
+  if (!run.workflowId) return false;
+  const Workflow = require("../models/workflow");
+  const workflow = await Workflow.findById(run.workflowId).lean();
+  if (!keepsWorktreeOnFailure(workflow)) return false;
+  if (run.status !== "success") return true;
+  const ended = run.endedAt ? new Date(run.endedAt).getTime() : NaN;
+  if (!Number.isFinite(ended)) return true;
+  return Date.now() - ended <= retentionMs(workflow);
+}
+
 async function reconcileWorktrees({ repoPath, worktreesDir } = {}) {
   const Run = require("../models/Run");
   const dir = worktreesDir || config.worktreesDir;
@@ -394,17 +466,44 @@ async function reconcileWorktrees({ repoPath, worktreesDir } = {}) {
     });
   }
 
-  const removing = await Run.find({ "external.worktreeState": "removing" });
+  const removing = await Run.find({
+    $or: [
+      { "external.worktreeState": "removing" },
+      { "external.repos.app.worktreeState": "removing" },
+      { "external.repos.automation.worktreeState": "removing" },
+    ],
+  });
   for (const run of removing) {
-    const worktreePath = run.external && run.external.worktreePath;
-    const repo = (run.external && run.external.repoPath) || repoPath;
-    if (!worktreePath || !repo) continue;
-    try {
-      await removeWorktree({ repoPath: repo, worktreePath, worktreesDir: base });
-      run.external.worktreeState = "removed";
-      await Run.updateOne({ _id: run._id }, { $set: { "external.worktreeState": "removed" } });
-    } catch (err) {
-      console.error("[git] reconcile remove failed:", err.message);
+    const external = run.external || {};
+    const jobs = [];
+    if (external.worktreeState === "removing" && external.worktreePath) {
+      jobs.push({
+        worktreePath: external.worktreePath,
+        repoPath: external.repoPath || repoPath,
+        update: { "external.worktreeState": "removed" },
+      });
+    }
+    for (const role of ["app", "automation"]) {
+      const entry = external.repos && external.repos[role];
+      if (!entry || entry.worktreeState !== "removing" || !entry.worktreePath) continue;
+      jobs.push({
+        worktreePath: entry.worktreePath,
+        repoPath: entry.repoPath || repoPath,
+        update: { [`external.repos.${role}.worktreeState`]: "removed" },
+      });
+    }
+    for (const job of jobs) {
+      if (!job.worktreePath || !job.repoPath) continue;
+      try {
+        await removeWorktree({
+          repoPath: job.repoPath,
+          worktreePath: job.worktreePath,
+          worktreesDir: base,
+        });
+        await Run.updateOne({ _id: run._id }, { $set: job.update });
+      } catch (err) {
+        console.error("[git] reconcile remove failed:", err.message);
+      }
     }
   }
 
@@ -428,7 +527,7 @@ async function reconcileWorktrees({ repoPath, worktreesDir } = {}) {
     if (!SEGMENT.test(name)) continue;
     const runId = name.slice(0, 24);
     const run = await Run.findById(runId);
-    if (run && (run.status === "running" || run.status === "waiting")) continue;
+    if (await keepReconciledWorktree(run)) continue;
     await fs.promises.rm(real, { recursive: true, force: true }).catch((err) => {
       console.error("[git] orphan remove failed:", err.message);
     });
@@ -444,7 +543,9 @@ module.exports = {
   branchForRun,
   assertBranchName,
   createWorktree,
+  openExistingWorktree,
   removeWorktree,
+  keepsWorktreeOnFailure,
   buildPushEnv,
   pushArgs,
   pushBranch,

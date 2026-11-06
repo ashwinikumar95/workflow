@@ -1,10 +1,20 @@
 /**
  * Runtime gate. Throws before push or GitHub when the predecessor pass is missing.
  */
-function assertPullRequestGate({ external, predecessorId, head }) {
-  const map = external && external.playwrightByNode;
+function gateSource(external, role) {
+  if (external && external.repos && typeof external.repos === "object") {
+    if (role && external.repos[role]) return external.repos[role];
+    return null;
+  }
+  return external || null;
+}
+
+function assertPullRequestGate({ external, predecessorId, head, role }) {
+  const source = gateSource(external, role);
+  const map =
+    (source && source.playwrightByNode) || (external && external.playwrightByNode);
   const entry = map && predecessorId ? map[predecessorId] : undefined;
-  const tested = external && external.testedSha;
+  const tested = source && source.testedSha;
   if (!entry || entry.status !== "passed" || entry.reportPresent !== true) {
     throw new Error("Pull request gate rejected");
   }

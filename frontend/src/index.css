@@ -444,6 +444,10 @@ textarea {
   background: rgba(255, 196, 0, 0.14);
   color: #ffd56a;
 }
+.badge-interrupted {
+  background: rgba(120, 160, 255, 0.16);
+  color: #b7c9ff;
+}
 
 .state-row {
   display: flex;

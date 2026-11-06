@@ -4,8 +4,9 @@ import { workflowApi } from '../lib/api'
 
 function statusClass(status) {
   if (status === 'success') return 'ok'
-  if (status === 'failed') return 'danger'
+  if (status === 'failed' || status === 'cancelled') return 'danger'
   if (status === 'waiting') return 'wait'
+  if (status === 'interrupted') return 'interrupted'
   return 'muted'
 }
 
