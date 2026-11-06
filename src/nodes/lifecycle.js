@@ -22,6 +22,8 @@ const {
   readReview,
 } = require("../services/agentContract");
 const { evaluateApproval } = require("../services/approvalService");
+const commitPushGuard = require("../services/commitPushGuard");
+const { buildPrBody, buildPrTitle } = require("../services/prBody");
 
 function asObject(input) {
   if (input && typeof input === "object" && !Array.isArray(input)) return { ...input };
@@ -150,6 +152,61 @@ async function rememberPlanHash(runId, planHash) {
   } catch {
     // TicketRun is optional for ad-hoc workflows.
   }
+}
+
+async function rememberPrUrl(runId, url, role) {
+  if (!runId || !url) return;
+  try {
+    const TicketRun = require("../models/TicketRun");
+    const field = role === "automation" ? "linkedPrUrl" : "prUrl";
+    await TicketRun.updateOne({ runId: String(runId) }, { $set: { [field]: url } });
+  } catch {
+    // TicketRun is optional for ad-hoc workflows.
+  }
+}
+
+function credentialFilesFor(node, input) {
+  const cfg = node && node.config && typeof node.config === "object" ? node.config : {};
+  if (Array.isArray(cfg.appCredentialFiles) && cfg.appCredentialFiles.length) return cfg.appCredentialFiles;
+  if (Array.isArray(cfg.credentialFiles) && cfg.credentialFiles.length) return cfg.credentialFiles;
+  const profile = profileFromInput(input);
+  if (profile && profile.repo && Array.isArray(profile.repo.credentialFiles) && profile.repo.credentialFiles.length) {
+    return profile.repo.credentialFiles;
+  }
+  return [".env"];
+}
+
+async function applyGuard(node, base, runState, stage) {
+  const role = nodeRole(node);
+  const active = externalFor({ ...runState, node }, role);
+  const worktreePath = role ? active.worktreePath : active.worktreePath || base.worktreePath;
+  if (!worktreePath) return { ok: true, errors: [] };
+  const profile = profileFromInput(base);
+  const result = await commitPushGuard.assertCommitPushGuard({
+    worktreePath,
+    baseSha: active.preAgentSha || base.preAgentSha || base.baseSha,
+    sourceRepoPath: active.repoPath || (profile && profile.repo && profile.repo.location) || "",
+    credentialFiles: credentialFilesFor(node, base),
+    stage,
+  });
+  if (result.ok) return result;
+  const slack = require("../services/slackService");
+  await slack.emit(runState && runState.runId, "env_failed", {
+    reason: result.summary || "commit/push guard failed",
+    stage,
+    file: result.errors && result.errors[0] && result.errors[0].file,
+  });
+  return result;
+}
+
+function guardOutput(base, result) {
+  return {
+    ...base,
+    branch: "false",
+    reason: "env",
+    guardFailed: true,
+    failureClassification: commitPushGuard.classificationFrom(result),
+  };
 }
 
 async function removeQuiet(runState) {
@@ -404,6 +461,11 @@ async function cursorAgentNode(node, input, runState) {
         await removeQuiet(state);
         return { ...base, branch: "false", reason: artifact.reason || "invalid_result" };
       }
+      const guarded = await applyGuard(node, base, runState, "agent");
+      if (!guarded.ok) {
+        await removeQuiet(state);
+        return guardOutput(base, guarded);
+      }
     }
     return {
       ...base,
@@ -563,6 +625,11 @@ async function playwrightNode(node, input, runState) {
     });
     return { ...base, branch: "false" };
   }
+  const guarded = await applyGuard(node, base, runState, "tests");
+  if (!guarded.ok) {
+    await removeQuiet(state);
+    return guardOutput(base, guarded);
+  }
   const external = externalPatch(role, { testedSha: ready.head, worktreePath, worktreeState: "ready" });
   if (runState.checkpointExternal) await runState.checkpointExternal(external);
   const testRepository = cfg.testRepository && typeof cfg.testRepository === "object" ? cfg.testRepository : {};
@@ -638,6 +705,8 @@ async function githubPrNode(node, input, runState) {
   const role = nodeRole(node);
   const repository = nodeRepository(node);
   const external = externalFor({ ...runState, node }, role);
+  const guarded = await applyGuard(node, base, runState, "push");
+  if (!guarded.ok) return guardOutput(base, guarded);
   const head = await git.revParse(external.worktreePath);
   try {
     assertPullRequestGate({
@@ -661,12 +730,16 @@ async function githubPrNode(node, input, runState) {
   const url = await githubPrService.openPullRequest({
     owner: (repository && repository.owner) || config.githubOwner,
     repo: (repository && repository.repo) || config.githubRepo,
-    title: (base.jira && base.jira.summary) || external.branch,
+    title: buildPrTitle(base, external.branch),
     head: external.branch,
     base: git.resolveBaseBranch(runState.workflow, repository),
-    body: "",
+    body: buildPrBody(base, { linkedPrUrl: base.linkedPrUrl }),
     token,
   });
+  if (runState.checkpointExternal) {
+    await runState.checkpointExternal(externalPatch(role, { prUrl: url }));
+  }
+  await rememberPrUrl(runState.runId, url, role);
   const slack = require("../services/slackService");
   await slack.emit(runState.runId, "pr_created", {
     reason: "pull request opened",
@@ -685,7 +758,7 @@ async function githubPrNode(node, input, runState) {
   } catch (err) {
     console.error("[githubPr] worktree remove failed:", err.message);
   }
-  return { ...base, prUrl: url };
+  return { ...base, prUrl: url, branch: "true" };
 }
 
 module.exports = {

@@ -500,6 +500,13 @@ function stateForStage(stage) {
     case "pr_open":
     case "push":
       return "pr_open";
+    case "blocked":
+      return "blocked";
+    case "rejected":
+      return "rejected";
+    case "completed":
+    case "jira_closeout":
+      return "completed";
     default:
       return "";
   }

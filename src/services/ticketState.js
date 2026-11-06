@@ -3,12 +3,12 @@ const { TERMINAL_STATES } = TicketRun;
 
 const ALLOWED = {
   claimed: ["planning", "skipped", "cancelled"],
-  planning: ["awaiting_approval", "interrupted", "failed", "cancelled"],
+  planning: ["awaiting_approval", "blocked", "interrupted", "failed", "cancelled"],
   awaiting_approval: ["rejected", "expired", "queued", "cancelled"],
   queued: ["implementing", "planning", "cancelled"],
-  implementing: ["verifying", "interrupted", "cancelled"],
+  implementing: ["verifying", "blocked", "interrupted", "cancelled"],
   verifying: ["implementing", "pr_open", "blocked", "interrupted", "cancelled"],
-  pr_open: ["completed", "interrupted", "cancelled"],
+  pr_open: ["completed", "blocked", "interrupted", "cancelled"],
   interrupted: ["planning", "implementing", "verifying", "cancelled"],
   expired: ["planning", "cancelled"],
 };

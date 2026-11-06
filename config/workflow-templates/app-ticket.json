@@ -1,0 +1,27 @@
+{
+  "kind": "app-ticket",
+  "name": "{{jiraKey}} app ticket",
+  "fixAttemptsPath": "agent.maxFixAttempts",
+  "prefix": [
+    "fetch",
+    "claim",
+    "gitApp",
+    "promptPlan",
+    "agentPlan",
+    "approvePlan",
+    "promptImpl",
+    "agentImpl"
+  ],
+  "verify": ["rules", "reviewPrompt", "review", "select", "playwright"],
+  "fix": ["prompt", "agent"],
+  "success": ["pr", "notifyPr", "jiraReview"],
+  "stops": {
+    "plan": ["notifyPlanFailed", "jiraPlanFailed"],
+    "rejected": ["notifyPlanRejected", "jiraPlanRejected"],
+    "agent": ["notifyAgentFailed", "jiraAgentFailed"],
+    "env": ["notifyEnv", "jiraEnv"],
+    "gate": ["notifyGate", "jiraGate"],
+    "rules": ["notifyRules", "jiraRules"],
+    "playwright": ["notifyPlaywright", "jiraPlaywright"]
+  }
+}

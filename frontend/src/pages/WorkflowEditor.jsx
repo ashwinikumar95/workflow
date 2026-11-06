@@ -23,6 +23,7 @@ import AnalysisNode from '../components/nodes/AnalysisNode'
 import CursorPromptNode from '../components/nodes/CursorPromptNode'
 import GitBranchNode from '../components/nodes/GitBranchNode'
 import CursorAgentNode from '../components/nodes/CursorAgentNode'
+import RulesChecksNode from '../components/nodes/RulesChecksNode'
 import TestSelectNode from '../components/nodes/TestSelectNode'
 import PlaywrightNode from '../components/nodes/PlaywrightNode'
 import GithubPrNode from '../components/nodes/GithubPrNode'
@@ -62,12 +63,13 @@ const nodeTypes = {
   cursorPrompt: CursorPromptNode,
   gitBranch: GitBranchNode,
   cursorAgent: CursorAgentNode,
+  rulesChecks: RulesChecksNode,
   testSelect: TestSelectNode,
   playwright: PlaywrightNode,
   githubPr: GithubPrNode,
 }
 
-const branchNodeTypes = new Set(['approval', 'cursorAgent', 'playwright'])
+const branchNodeTypes = new Set(['approval', 'cursorAgent', 'playwright', 'condition', 'rulesChecks'])
 
 function parseBodyJson(text) {
   const t = text.trim()
@@ -263,6 +265,7 @@ export default function WorkflowEditor() {
         cursorPrompt: 'Cursor prompt',
         gitBranch: 'Git branch',
         cursorAgent: 'Cursor agent',
+        rulesChecks: 'Rules checks',
         testSelect: 'Test select',
         playwright: 'Playwright',
         githubPr: 'Pull request',
@@ -1300,7 +1303,7 @@ export default function WorkflowEditor() {
                 />
               </label>
             </div>
-          ) : selectedNode && ['jira', 'analysis', 'cursorPrompt', 'gitBranch', 'cursorAgent', 'testSelect', 'githubPr'].includes(nodeKind) ? (
+          ) : selectedNode && ['jira', 'analysis', 'cursorPrompt', 'gitBranch', 'cursorAgent', 'rulesChecks', 'testSelect', 'githubPr'].includes(nodeKind) ? (
             <div className="form-stack tight">
               <p className="muted small">
                 This title is a label. Repository paths, API tokens, and model keys stay in the worker environment.

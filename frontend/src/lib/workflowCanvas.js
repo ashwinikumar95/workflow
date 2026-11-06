@@ -36,6 +36,7 @@ const defaultAnalysisConfig = () => ({ title: 'Analysis' })
 const defaultCursorPromptConfig = () => ({ title: 'Cursor prompt', mode: '' })
 const defaultGitBranchConfig = () => ({ title: 'Git branch' })
 const defaultCursorAgentConfig = () => ({ title: 'Cursor agent', mode: '' })
+const defaultRulesChecksConfig = () => ({ title: 'Rules checks' })
 const defaultTestSelectConfig = () => ({ title: 'Test select', mode: '' })
 const defaultPlaywrightConfig = () => ({
   title: 'Playwright',
@@ -47,9 +48,9 @@ const defaultPlaywrightConfig = () => ({
   testCommand: [],
   testRepository: { location: '', defaultBranch: '', credentialRef: '' },
 })
-const defaultGithubPrConfig = () => ({ title: 'Pull request' })
+const defaultGithubPrConfig = () => ({ title: 'Pull request', retries: 1 })
 
-const branchTypes = new Set(['approval', 'cursorAgent', 'playwright'])
+const branchTypes = new Set(['approval', 'cursorAgent', 'playwright', 'condition', 'rulesChecks'])
 
 export function defaultConfigForType(type) {
   switch (type) {
@@ -73,6 +74,8 @@ export function defaultConfigForType(type) {
       return defaultGitBranchConfig()
     case 'cursorAgent':
       return defaultCursorAgentConfig()
+    case 'rulesChecks':
+      return defaultRulesChecksConfig()
     case 'testSelect':
       return defaultTestSelectConfig()
     case 'playwright':
@@ -133,6 +136,7 @@ const labels = {
   cursorPrompt: 'Cursor prompt',
   gitBranch: 'Git branch',
   cursorAgent: 'Cursor agent',
+  rulesChecks: 'Rules checks',
   testSelect: 'Test select',
   playwright: 'Playwright',
   githubPr: 'Pull request',
