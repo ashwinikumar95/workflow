@@ -112,7 +112,12 @@ async function heartbeat(now = new Date()) {
   let extended = 0;
   const nextExpiry = new Date(now.getTime() + TTL_MS);
   for (const lock of locks) {
-    const run = await Run.findById(lock.owner).select("status").lean();
+    let run = null;
+    try {
+      run = await Run.findById(lock.owner).select("status").lean();
+    } catch {
+      run = null;
+    }
     if (!run || !LIVE_RUN_STATUSES.has(run.status)) continue;
     const result = await ResourceLock.updateOne(
       {

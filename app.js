@@ -8,6 +8,7 @@ const triggerRoutes = require("./src/routes/triggerRoutes");
 const userRoutes = require("./src/routes/userRoutes");
 const authRoutes = require("./src/routes/authRoutes");
 const runRoutes = require("./src/routes/runRoutes");
+const jiraRoutes = require("./src/routes/jiraRoutes");
 
 require("./src/services/queue");
 if (config.workflowWorkerEnabled) {
@@ -27,6 +28,7 @@ app.use("/workflow", workflowRoutes);
 app.use("/", triggerRoutes);
 app.use("/user", userRoutes);
 app.use("/runs", runRoutes);
+app.use("/jira", jiraRoutes);
 app.get("/", (req, res) => {
   res.send("Workflow Builder API Running");
 });

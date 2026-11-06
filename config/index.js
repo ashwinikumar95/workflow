@@ -83,6 +83,14 @@ module.exports = {
   get jiraWebhookSecret() {
     return process.env.JIRA_WEBHOOK_SECRET || "";
   },
+  /**
+   * Cron for the Jira bucket dispatcher. Unset defaults to every 5 minutes.
+   * An empty string disables it.
+   */
+  get jiraDispatchCron() {
+    if (process.env.JIRA_DISPATCH_CRON === "") return "";
+    return process.env.JIRA_DISPATCH_CRON || "*/5 * * * *";
+  },
   get analysisBaseUrl() {
     return process.env.ANALYSIS_BASE_URL || "";
   },

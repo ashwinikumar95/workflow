@@ -1,16 +1,48 @@
 const cron = require("node-cron");
 const mongoose = require("mongoose");
+const config = require("../../config");
 const Workflow = require("../models/workflow");
 const { enqueueWorkflowJob } = require("./enqueueWorkflowJob");
 
 /** @type {Map<string, ReturnType<typeof cron.schedule>>} */
 const scheduledByWorkflowId = new Map();
 
+/** @type {ReturnType<typeof cron.schedule> | null} */
+let dispatchTask = null;
+
 function stopAllCronTasks() {
   for (const [, task] of [...scheduledByWorkflowId.entries()]) {
     task.stop();
   }
   scheduledByWorkflowId.clear();
+}
+
+function stopDispatcherCron() {
+  if (!dispatchTask) return;
+  dispatchTask.stop();
+  dispatchTask = null;
+}
+
+function startDispatcherCron() {
+  stopDispatcherCron();
+  const expr = String(config.jiraDispatchCron || "").trim();
+  if (!expr) return;
+  if (!cron.validate(expr)) {
+    console.warn(`[scheduler] Skipping Jira dispatcher: invalid cron "${expr}"`);
+    return;
+  }
+  dispatchTask = cron.schedule(
+    expr,
+    async () => {
+      try {
+        const { dispatch } = require("./jiraDispatcher");
+        await dispatch({ dryRun: false });
+      } catch (err) {
+        console.error("[scheduler] Jira dispatcher failed:", err.message);
+      }
+    },
+    { scheduled: true }
+  );
 }
 
 async function syncCronSchedulesFromDb() {
@@ -64,10 +96,16 @@ function startScheduler() {
     syncCronSchedulesFromDb().catch((err) =>
       console.error("[scheduler] Sync failed:", err.message)
     );
+    startDispatcherCron();
   };
 
   if (mongoose.connection.readyState === 1) run();
   else mongoose.connection.once("connected", run);
 }
 
-module.exports = { startScheduler, syncCronSchedulesFromDb };
+module.exports = {
+  startScheduler,
+  syncCronSchedulesFromDb,
+  startDispatcherCron,
+  stopDispatcherCron,
+};

@@ -64,6 +64,9 @@ const workflowSchema = new mongoose.Schema({
     type: String,
     enum: ["docker", "host"],
   },
+
+  /** Jira project key this published workflow belongs to (MF, MFC, QUT, TAC). */
+  profileKey: String,
 }, { timestamps: true });
 
 module.exports =

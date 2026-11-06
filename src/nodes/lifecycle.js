@@ -6,10 +6,40 @@ const prompts = require("../services/cursorPromptService");
 const git = require("../services/gitService");
 const { assertPullRequestGate } = require("../services/pullRequestGate");
 const githubPrService = require("../services/githubPrService");
+const { parseProfiles, resolveProfile } = require("../services/projectRegistry");
 
 function asObject(input) {
   if (input && typeof input === "object" && !Array.isArray(input)) return { ...input };
   return { payload: input };
+}
+
+function interpolate(template, input) {
+  if (typeof template !== "string") return "";
+  return template.replace(/\{\{([^}]+)\}\}/g, (_, key) => {
+    const parts = String(key).trim().split(".").filter(Boolean);
+    let cur = input;
+    for (const part of parts) {
+      if (cur == null || typeof cur !== "object") return "";
+      cur = cur[part];
+    }
+    if (cur === undefined || cur === null) return "";
+    if (typeof cur === "object") return JSON.stringify(cur).slice(0, 200);
+    return String(cur);
+  });
+}
+
+function resolveTransitionName(cfg, issueKey) {
+  const raw = cfg && typeof cfg.transition === "string" ? cfg.transition.trim() : "";
+  if (!raw) return "";
+  try {
+    const profile = resolveProfile(issueKey, parseProfiles());
+    if (profile && profile.transitions && profile.transitions[raw]) {
+      return profile.transitions[raw];
+    }
+  } catch {
+    // Profiles are optional for ad-hoc nodes; use the configured name as-is.
+  }
+  return raw;
 }
 
 function nodeRepository(node) {
@@ -91,6 +121,32 @@ async function jiraNode(_node, input) {
   if (base.jira && base.jira.id && base.jira.key) return { ...base, jira: base.jira };
   const issue = await jira.fetchIssue(typeof base.issueKey === "string" ? base.issueKey : "");
   return { ...base, jira: issue };
+}
+
+async function jiraUpdateNode(node, input, runState) {
+  const base = asObject(input);
+  const cfg = node && node.config && typeof node.config === "object" ? node.config : {};
+  const key =
+    (base.jira && typeof base.jira.key === "string" && base.jira.key) ||
+    (typeof base.issueKey === "string" ? base.issueKey : "");
+  const marker =
+    typeof cfg.marker === "string" && cfg.marker.trim()
+      ? cfg.marker.trim()
+      : jira.commentMarker(runState && runState.runId, runState && runState.nodeId);
+  const statusName = resolveTransitionName(cfg, key);
+  const update = { marker };
+  if (statusName) {
+    update.transition = await jira.transitionIssue(key, statusName, {
+      marker,
+      commentOnMissing: true,
+    });
+  }
+  const commentTemplate = typeof cfg.comment === "string" ? cfg.comment : "";
+  if (commentTemplate.trim()) {
+    const text = `${interpolate(commentTemplate, base)}\n${marker}`.trim();
+    update.comment = await jira.addComment(key, text, marker);
+  }
+  return { ...base, jiraUpdate: update };
 }
 
 async function analysisNode(_node, input) {
@@ -286,6 +342,7 @@ async function githubPrNode(node, input, runState) {
 
 module.exports = {
   jira: jiraNode,
+  jiraUpdate: jiraUpdateNode,
   analysis: analysisNode,
   cursorPrompt: cursorPromptNode,
   gitBranch: gitBranchNode,

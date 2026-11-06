@@ -18,6 +18,7 @@ import DelayNode from '../components/nodes/DelayNode'
 import NotifyNode from '../components/nodes/NotifyNode'
 import ApprovalNode from '../components/nodes/ApprovalNode'
 import JiraNode from '../components/nodes/JiraNode'
+import JiraUpdateNode from '../components/nodes/JiraUpdateNode'
 import AnalysisNode from '../components/nodes/AnalysisNode'
 import CursorPromptNode from '../components/nodes/CursorPromptNode'
 import GitBranchNode from '../components/nodes/GitBranchNode'
@@ -26,7 +27,7 @@ import PlaywrightNode from '../components/nodes/PlaywrightNode'
 import GithubPrNode from '../components/nodes/GithubPrNode'
 import KeyValueRows from '../components/KeyValueRows'
 import UxSection from '../components/UxSection'
-import { webhookUrl, workflowApi } from '../lib/api'
+import { jiraApi, webhookUrl, workflowApi } from '../lib/api'
 import {
   bodyObjectToRows,
   headersObjectToRows,
@@ -55,6 +56,7 @@ const nodeTypes = {
   notify: NotifyNode,
   approval: ApprovalNode,
   jira: JiraNode,
+  jiraUpdate: JiraUpdateNode,
   analysis: AnalysisNode,
   cursorPrompt: CursorPromptNode,
   gitBranch: GitBranchNode,
@@ -99,6 +101,7 @@ export default function WorkflowEditor() {
   const [saving, setSaving] = useState(false)
   const [publishing, setPublishing] = useState(false)
   const [starting, setStarting] = useState(false)
+  const [jiraIssue, setJiraIssue] = useState('')
   const [togglingPause, setTogglingPause] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
@@ -253,6 +256,7 @@ export default function WorkflowEditor() {
         notify: 'Notify',
         approval: 'Approval',
         jira: 'Jira',
+        jiraUpdate: 'Jira update',
         analysis: 'Analysis',
         cursorPrompt: 'Cursor prompt',
         gitBranch: 'Git branch',
@@ -400,8 +404,14 @@ export default function WorkflowEditor() {
     setError('')
     setMessage('')
     try {
-      const { data } = await workflowApi.start(id, {})
-      setMessage(`Queued — jobId: ${data.jobId}`)
+      const issue = jiraIssue.trim()
+      if (issue) {
+        const { data } = await jiraApi.run(issue)
+        setMessage(`Queued — ${data.jiraKey} run ${data.runId}`)
+      } else {
+        const { data } = await workflowApi.start(id, {})
+        setMessage(`Queued — jobId: ${data.jobId}`)
+      }
       setTimeout(() => setMessage(''), 4000)
     } catch (err) {
       setError(err.response?.data?.error || err.message || 'Start failed')
@@ -849,6 +859,10 @@ export default function WorkflowEditor() {
               <span className="ux-node-card-title">Jira issue</span>
               <span className="ux-node-card-desc">Load the ticket summary and description</span>
             </button>
+            <button type="button" className="ux-node-card" onClick={() => addNode('jiraUpdate')} disabled={!canEditGraph}>
+              <span className="ux-node-card-title">Jira update</span>
+              <span className="ux-node-card-desc">Transition the ticket or post a comment once per run</span>
+            </button>
             <button type="button" className="ux-node-card" onClick={() => addNode('analysis')} disabled={!canEditGraph}>
               <span className="ux-node-card-title">Analysis</span>
               <span className="ux-node-card-desc">Summarize the ticket before anyone edits the repo</span>
@@ -956,9 +970,19 @@ export default function WorkflowEditor() {
                     {starting ? 'Starting…' : 'Run now'}
                   </button>
                 </div>
+                <label className="field jira-issue-field">
+                  <span>Jira ticket</span>
+                  <input
+                    value={jiraIssue}
+                    onChange={(e) => setJiraIssue(e.target.value)}
+                    placeholder="MF-123 or https://…/browse/MF-123"
+                    disabled={starting}
+                  />
+                </label>
                 <p className="muted small">
                   While paused, incoming webhooks and cron are rejected. Run now needs an active (non-paused)
-                  workflow.
+                  workflow. Paste a Jira link or key to run that ticket; leave it empty to start this workflow
+                  with no input.
                 </p>
               </div>
 
@@ -1232,6 +1256,39 @@ export default function WorkflowEditor() {
                 <input
                   value={selectedNode.data?.config?.title || ''}
                   onChange={(e) => updateSelectedNodeConfig({ title: e.target.value })}
+                  disabled={!canEditGraph}
+                />
+              </label>
+            </div>
+          ) : selectedNode && nodeKind === 'jiraUpdate' ? (
+            <div className="form-stack tight">
+              <p className="muted small">
+                Transitions and comments run once per step. A run and stage marker is added so a retry does not
+                post twice. Retries default to 1.
+              </p>
+              <label className="field">
+                <span>Title</span>
+                <input
+                  value={selectedNode.data?.config?.title || ''}
+                  onChange={(e) => updateSelectedNodeConfig({ title: e.target.value })}
+                  disabled={!canEditGraph}
+                />
+              </label>
+              <label className="field">
+                <span>Transition</span>
+                <input
+                  value={selectedNode.data?.config?.transition || ''}
+                  onChange={(e) => updateSelectedNodeConfig({ transition: e.target.value })}
+                  placeholder="claim, review, blocked, or a status name"
+                  disabled={!canEditGraph}
+                />
+              </label>
+              <label className="field">
+                <span>Comment</span>
+                <textarea
+                  rows={3}
+                  value={selectedNode.data?.config?.comment || ''}
+                  onChange={(e) => updateSelectedNodeConfig({ comment: e.target.value })}
                   disabled={!canEditGraph}
                 />
               </label>

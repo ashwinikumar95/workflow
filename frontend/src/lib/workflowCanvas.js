@@ -26,6 +26,12 @@ const defaultApprovalConfig = () => ({
 })
 
 const defaultJiraConfig = () => ({ title: 'Jira' })
+const defaultJiraUpdateConfig = () => ({
+  title: 'Jira update',
+  transition: '',
+  comment: '',
+  retries: 1,
+})
 const defaultAnalysisConfig = () => ({ title: 'Analysis' })
 const defaultCursorPromptConfig = () => ({ title: 'Cursor prompt' })
 const defaultGitBranchConfig = () => ({ title: 'Git branch' })
@@ -56,6 +62,8 @@ export function defaultConfigForType(type) {
       return defaultApprovalConfig()
     case 'jira':
       return defaultJiraConfig()
+    case 'jiraUpdate':
+      return defaultJiraUpdateConfig()
     case 'analysis':
       return defaultAnalysisConfig()
     case 'cursorPrompt':
@@ -117,6 +125,7 @@ const labels = {
   notify: 'Notify',
   approval: 'Approval',
   jira: 'Jira',
+  jiraUpdate: 'Jira update',
   analysis: 'Analysis',
   cursorPrompt: 'Cursor prompt',
   gitBranch: 'Git branch',

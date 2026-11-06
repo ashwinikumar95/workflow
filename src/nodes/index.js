@@ -77,6 +77,7 @@ async function executeNode(node, input, runState) {
     }
 
     case "jira":
+    case "jiraUpdate":
     case "analysis":
     case "cursorPrompt":
     case "gitBranch":

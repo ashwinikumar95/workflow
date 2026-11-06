@@ -299,7 +299,12 @@ async function recoverExpiredLocks(deps = {}) {
   const expired = await ResourceLock.find({ expiresAt: { $lte: now } }).lean();
   const released = [];
   for (const lock of expired) {
-    const run = await Run.findById(lock.owner);
+    let run = null;
+    try {
+      run = await Run.findById(lock.owner);
+    } catch {
+      run = null;
+    }
     const ticket = await TicketRun.findOne({ runId: String(lock.owner) });
     await killRunProcesses(run, ticket, deps);
     const result = await ResourceLock.deleteOne({

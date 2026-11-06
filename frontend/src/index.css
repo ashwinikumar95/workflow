@@ -835,6 +835,10 @@ textarea {
   min-width: 8rem;
 }
 
+.jira-issue-field {
+  margin-top: 0.75rem;
+}
+
 .inspector {
   margin-top: 1.25rem;
   padding-top: 1rem;
