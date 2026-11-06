@@ -111,6 +111,10 @@ function startWorkflowWorker() {
     slack.retryPending().catch((err) => {
       console.error("[Worker] Slack retry failed:", err.message);
     });
+    const artifacts = require("../services/artifactRedactor");
+    artifacts.reconcileArtifacts().catch((err) => {
+      console.error("[Worker] artifact retention failed:", err.message);
+    });
   }, 5000);
   if (typeof pendingTimer.unref === "function") pendingTimer.unref();
   worker.on("closed", () => clearInterval(pendingTimer));

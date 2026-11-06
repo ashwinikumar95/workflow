@@ -467,6 +467,8 @@ function stageForNode(node) {
     }
     case "approval":
       return "awaiting_approval";
+    case "testSelect":
+      return "verifying";
     case "playwright":
       return "playwright";
     case "githubPr":
@@ -493,6 +495,7 @@ function stateForStage(stage) {
     case "gates":
     case "rules_review":
     case "baseline":
+    case "verifying":
       return "verifying";
     case "pr_open":
     case "push":

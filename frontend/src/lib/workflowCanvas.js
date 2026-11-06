@@ -36,6 +36,7 @@ const defaultAnalysisConfig = () => ({ title: 'Analysis' })
 const defaultCursorPromptConfig = () => ({ title: 'Cursor prompt', mode: '' })
 const defaultGitBranchConfig = () => ({ title: 'Git branch' })
 const defaultCursorAgentConfig = () => ({ title: 'Cursor agent', mode: '' })
+const defaultTestSelectConfig = () => ({ title: 'Test select', mode: '' })
 const defaultPlaywrightConfig = () => ({
   title: 'Playwright',
   strategy: '',
@@ -72,6 +73,8 @@ export function defaultConfigForType(type) {
       return defaultGitBranchConfig()
     case 'cursorAgent':
       return defaultCursorAgentConfig()
+    case 'testSelect':
+      return defaultTestSelectConfig()
     case 'playwright':
       return defaultPlaywrightConfig()
     case 'githubPr':
@@ -130,6 +133,7 @@ const labels = {
   cursorPrompt: 'Cursor prompt',
   gitBranch: 'Git branch',
   cursorAgent: 'Cursor agent',
+  testSelect: 'Test select',
   playwright: 'Playwright',
   githubPr: 'Pull request',
 }

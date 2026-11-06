@@ -172,6 +172,15 @@ module.exports = {
   get playwrightArtifactsDir() {
     return process.env.PLAYWRIGHT_ARTIFACTS_DIR || "";
   },
+  get artifactsDir() {
+    return process.env.ARTIFACTS_DIR || process.env.PLAYWRIGHT_ARTIFACTS_DIR || "";
+  },
+  get artifactRetentionPublicDays() {
+    return parsePositiveInt(process.env.ARTIFACT_RETENTION_PUBLIC_DAYS, 30);
+  },
+  get artifactRetentionPrivateDays() {
+    return parsePositiveInt(process.env.ARTIFACT_RETENTION_PRIVATE_DAYS, 7);
+  },
   get playwrightMemory() {
     return process.env.PLAYWRIGHT_MEMORY || "2g";
   },

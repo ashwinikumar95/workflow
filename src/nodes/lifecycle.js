@@ -495,6 +495,40 @@ async function rulesChecksNode(node, input, runState) {
   return { ...base, rulesChecks: result, branch: result.ok ? "true" : "false" };
 }
 
+async function testSelectNode(node, input, runState) {
+  const base = asObject(input);
+  const cfg = node.config && typeof node.config === "object" ? node.config : {};
+  const profile = profileFromInput(base);
+  const testSelect = require("../services/testSelect");
+  const mode =
+    cfg.mode === "automation" || cfg.mode === "app"
+      ? cfg.mode
+      : profile && profile.kind === "automation"
+        ? "automation"
+        : "app";
+  const role = nodeRole(node) || (mode === "automation" ? "automation" : "app");
+  const active = externalFor(runState, role);
+  const worktreePath = active.worktreePath || base.worktreePath;
+  const fromSha = active.preAgentSha || base.preAgentSha;
+  const selection = await testSelect.selectForRun({
+    input: base,
+    config: { ...cfg, mode },
+    profile,
+    worktreePath,
+    fromSha,
+    toSha: "HEAD",
+  });
+  try {
+    const TicketRun = require("../models/TicketRun");
+    if (runState && runState.runId) {
+      await TicketRun.updateOne({ runId: String(runState.runId) }, { $set: { selection } });
+    }
+  } catch {
+    // TicketRun is optional for ad-hoc workflows.
+  }
+  return { ...base, selection, branch: "true" };
+}
+
 async function playwrightNode(node, input, runState) {
   const base = asObject(input);
   const cfg = node.config && typeof node.config === "object" ? node.config : {};
@@ -503,7 +537,12 @@ async function playwrightNode(node, input, runState) {
   if (runState.resumed) {
     const branch = runState.completion && runState.completion.branch === "true" ? "true" : "false";
     if (branch === "false") await removeQuiet(state);
-    return { ...base, branch };
+    const result = runState.completion && runState.completion.result;
+    const extra = {};
+    if (result && result.report) extra.playwrightReport = result.report;
+    if (result && result.baseline) extra.baseline = result.baseline;
+    if (result && result.classification) extra.failureClassification = result.classification;
+    return { ...base, branch, ...extra };
   }
   if (cfg.strategy !== "in-repo" && cfg.strategy !== "external-repo") {
     throw new Error("Playwright strategy is required");
@@ -533,10 +572,35 @@ async function playwrightNode(node, input, runState) {
       : cfg.strategy === "in-repo"
         ? optionalRepoLocation(runState.workflow, nodeRepository(node))
         : testRepository.location || optionalRepoLocation(runState.workflow, nodeRepository(node));
+  const testSelect = require("../services/testSelect");
+  const selection = base.selection && typeof base.selection === "object" ? base.selection : null;
+  const testCommand = testSelect.appendSelection(
+    Array.isArray(cfg.testCommand) ? cfg.testCommand : [],
+    selection
+  );
+  const profile = profileFromInput(base);
+  const ticketKind =
+    cfg.ticketKind === "automation" || cfg.ticketKind === "app"
+      ? cfg.ticketKind
+      : profile && profile.kind === "automation"
+        ? "automation"
+        : profile && profile.kind === "app"
+          ? "app"
+          : "";
+  const appExt = externalFor(state, "app");
+  const autoExt = externalFor(state, "automation");
+  const baselineRepoPath =
+    ticketKind === "automation"
+      ? autoExt.repoPath || active.repoPath
+      : appExt.repoPath || active.repoPath;
+  const baseSha =
+    ticketKind === "automation"
+      ? autoExt.preAgentSha || preAgentSha
+      : appExt.preAgentSha || preAgentSha;
   return {
     control: "wait",
     kind: "playwright",
-    output: { ...base, testedSha: ready.head },
+    output: { ...base, testedSha: ready.head, selection },
     external,
     job: {
       runId: runState.runId,
@@ -552,7 +616,12 @@ async function playwrightNode(node, input, runState) {
       testPath: typeof cfg.testPath === "string" ? cfg.testPath : "",
       appCommand: Array.isArray(cfg.appCommand) ? cfg.appCommand : [],
       readiness: cfg.readiness || "/",
-      testCommand: Array.isArray(cfg.testCommand) ? cfg.testCommand : [],
+      testCommand,
+      selection,
+      ticketKind,
+      baseSha,
+      baselineRepoPath,
+      baseline: cfg.baseline === true,
       credentialFiles: Array.isArray(cfg.credentialFiles) ? cfg.credentialFiles : [],
       sourceRepoPath,
       appCredentialFiles: Array.isArray(cfg.appCredentialFiles) ? cfg.appCredentialFiles : [],
@@ -627,6 +696,7 @@ module.exports = {
   gitBranch: gitBranchNode,
   cursorAgent: cursorAgentNode,
   rulesChecks: rulesChecksNode,
+  testSelect: testSelectNode,
   playwright: playwrightNode,
   githubPr: githubPrNode,
 };

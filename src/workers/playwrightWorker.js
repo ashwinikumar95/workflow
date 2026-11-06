@@ -4,7 +4,7 @@ const queue = require("../services/queue");
 const { handlePlaywrightJob } = require("../services/playwrightAttempt");
 const { getPlaywrightQueue } = require("../services/queue");
 const { assertPinnedImage } = require("../services/containerSpec");
-const { installHost, browsersHost, runSuiteHost } = require("../services/hostRunners");
+const { installHost, browsersHost, runSuiteHost, runBaselineHost } = require("../services/hostRunners");
 
 async function enqueueSettle(payload) {
   await queue.add("settle-wait", payload, {
@@ -46,6 +46,7 @@ function startPlaywrightWorker() {
           install: (opts) => installHost({ ...opts, data }),
           browsers: (opts) => browsersHost({ ...opts, data }),
           runSuite: (opts) => runSuiteHost({ ...opts, data }),
+          runBaseline: (opts) => runBaselineHost({ ...opts, data }),
         });
         return;
       }

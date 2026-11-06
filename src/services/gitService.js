@@ -195,6 +195,39 @@ async function diffIsEmpty(fromSha, toSha, worktreePath) {
   }
 }
 
+async function diffNameOnly(fromSha, toSha, worktreePath) {
+  const result = await runGit(["-C", worktreePath, "diff", "--name-only", fromSha, toSha || "HEAD"]);
+  return String(result.stdout || "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\\/g, "/").trim())
+    .filter(Boolean);
+}
+
+async function addDetachedWorktree({ repoPath, sha, dest }) {
+  if (!repoPath || !sha || !dest) throw new Error("Detached worktree requires repoPath, sha, and dest");
+  await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+  let stats = null;
+  try {
+    stats = await fs.promises.lstat(dest);
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
+  if (stats) {
+    if (isLink(stats)) {
+      const err = new Error("Refusing to reuse a symlink baseline path");
+      err.code = "WORKTREE_SYMLINK";
+      throw err;
+    }
+    const head = await revParse(dest);
+    if (head === sha) return dest;
+    const err = new Error("Baseline worktree exists at a different SHA");
+    err.code = "WORKTREE_MISMATCH";
+    throw err;
+  }
+  await runGit(["-C", repoPath, "worktree", "add", "--detach", dest, sha]);
+  return dest;
+}
+
 async function readyForPlaywright(worktreePath, preAgentSha) {
   const head = await revParse(worktreePath);
   const clean = await isClean(worktreePath);
@@ -568,6 +601,8 @@ module.exports = {
   isClean,
   isAncestor,
   diffIsEmpty,
+  diffNameOnly,
+  addDetachedWorktree,
   readyForPlaywright,
   resolveRepoPath,
   resolveBaseBranch,

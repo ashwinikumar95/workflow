@@ -83,6 +83,7 @@ async function executeNode(node, input, runState) {
     case "gitBranch":
     case "cursorAgent":
     case "rulesChecks":
+    case "testSelect":
     case "playwright":
     case "githubPr":
       return require("./lifecycle")[node.type](node, input, runState);

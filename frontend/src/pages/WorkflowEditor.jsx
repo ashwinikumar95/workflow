@@ -23,6 +23,7 @@ import AnalysisNode from '../components/nodes/AnalysisNode'
 import CursorPromptNode from '../components/nodes/CursorPromptNode'
 import GitBranchNode from '../components/nodes/GitBranchNode'
 import CursorAgentNode from '../components/nodes/CursorAgentNode'
+import TestSelectNode from '../components/nodes/TestSelectNode'
 import PlaywrightNode from '../components/nodes/PlaywrightNode'
 import GithubPrNode from '../components/nodes/GithubPrNode'
 import KeyValueRows from '../components/KeyValueRows'
@@ -61,6 +62,7 @@ const nodeTypes = {
   cursorPrompt: CursorPromptNode,
   gitBranch: GitBranchNode,
   cursorAgent: CursorAgentNode,
+  testSelect: TestSelectNode,
   playwright: PlaywrightNode,
   githubPr: GithubPrNode,
 }
@@ -261,6 +263,7 @@ export default function WorkflowEditor() {
         cursorPrompt: 'Cursor prompt',
         gitBranch: 'Git branch',
         cursorAgent: 'Cursor agent',
+        testSelect: 'Test select',
         playwright: 'Playwright',
         githubPr: 'Pull request',
       }
@@ -879,6 +882,10 @@ export default function WorkflowEditor() {
               <span className="ux-node-card-title">Cursor agent</span>
               <span className="ux-node-card-desc">Edit the worktree. Done follows true, failure follows false</span>
             </button>
+            <button type="button" className="ux-node-card" onClick={() => addNode('testSelect')} disabled={!canEditGraph}>
+              <span className="ux-node-card-title">Test select</span>
+              <span className="ux-node-card-desc">Map the diff to Playwright modules or tags</span>
+            </button>
             <button type="button" className="ux-node-card" onClick={() => addNode('playwright')} disabled={!canEditGraph}>
               <span className="ux-node-card-title">Playwright</span>
               <span className="ux-node-card-desc">Run the suite against the tested revision</span>
@@ -1293,7 +1300,7 @@ export default function WorkflowEditor() {
                 />
               </label>
             </div>
-          ) : selectedNode && ['jira', 'analysis', 'cursorPrompt', 'gitBranch', 'cursorAgent', 'githubPr'].includes(nodeKind) ? (
+          ) : selectedNode && ['jira', 'analysis', 'cursorPrompt', 'gitBranch', 'cursorAgent', 'testSelect', 'githubPr'].includes(nodeKind) ? (
             <div className="form-stack tight">
               <p className="muted small">
                 This title is a label. Repository paths, API tokens, and model keys stay in the worker environment.
@@ -1306,6 +1313,20 @@ export default function WorkflowEditor() {
                   disabled={!canEditGraph}
                 />
               </label>
+              {nodeKind === 'testSelect' ? (
+                <label className="field">
+                  <span>Mode</span>
+                  <select
+                    value={selectedNode.data?.config?.mode || ''}
+                    onChange={(e) => updateSelectedNodeConfig({ mode: e.target.value })}
+                    disabled={!canEditGraph}
+                  >
+                    <option value="">From project profile</option>
+                    <option value="app">App ticket</option>
+                    <option value="automation">Automation ticket</option>
+                  </select>
+                </label>
+              ) : null}
               {nodeKind === 'cursorAgent' || nodeKind === 'cursorPrompt' ? (
                 <label className="field">
                   <span>Mode</span>

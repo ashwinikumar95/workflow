@@ -370,7 +370,11 @@ async function runSuiteHost(opts) {
     const command = Array.isArray(opts.command) && opts.command.length
       ? opts.command.slice()
       : ["node", "scripts/playwright-test.js"];
-    if (data.testPath) command.push(data.testPath);
+    if (data.testPath && !command.includes(data.testPath)) command.push(data.testPath);
+    const selected = data.selection && Array.isArray(data.selection.selectedPaths) ? data.selection.selectedPaths : [];
+    for (const arg of selected) {
+      if (arg != null && arg !== "" && !command.includes(String(arg))) command.push(String(arg));
+    }
     const extraEnv = { ...(opts.env || {}), CI: "1" };
     if (vite) extraEnv.BASE_URL = vite.baseUrl;
     const result = await hostProcess.run({
@@ -390,6 +394,113 @@ async function runSuiteHost(opts) {
   }
 }
 
+function commandPrefix(testCommand) {
+  const cmd = Array.isArray(testCommand) ? testCommand : [];
+  if (cmd[0] === "node" && cmd[1]) return cmd.slice(0, 2);
+  if (cmd.length) return [cmd[0]];
+  return ["node", "scripts/playwright-test.js"];
+}
+
+async function runBaselineHost(opts) {
+  const data = opts.data || {};
+  if (data.baseline === true) return { skipped: true, reason: "already-baseline" };
+  const baseline = require("./baseline");
+  const playwrightReport = require("./playwrightReport");
+  const artifactRedactor = require("./artifactRedactor");
+  const report = opts.report;
+  const failedArgs = Array.isArray(opts.command) && opts.command.length
+    ? opts.command.slice()
+    : baseline.failedTestArgs(report);
+  if (!failedArgs.length) return { skipped: true, reason: "no-failures" };
+
+  const ticketKind = data.ticketKind === "automation" ? "automation" : "app";
+  let appCwd = opts.appCwd;
+  let testCwd = opts.testCwd;
+  let created = "";
+  if (data.baselineWorktree) {
+    if (ticketKind === "automation") testCwd = data.baselineWorktree;
+    else appCwd = data.baselineWorktree;
+  } else if (data.baseSha && data.baselineRepoPath && config.worktreesDir && data.runId) {
+    const dest = path.join(config.worktreesDir, `${data.runId}-baseline`);
+    try {
+      created = await git.addDetachedWorktree({
+        repoPath: data.baselineRepoPath,
+        sha: data.baseSha,
+        dest,
+      });
+    } catch (err) {
+      return {
+        inconclusive: true,
+        status: "inconclusive",
+        reason: err && err.message ? err.message : "baseline-worktree",
+      };
+    }
+    if (ticketKind === "automation") testCwd = created;
+    else appCwd = created;
+  } else {
+    return { inconclusive: true, status: "inconclusive", reason: "no-baseline-worktree" };
+  }
+
+  const suite = await runSuiteHost({
+    ...opts,
+    appCwd,
+    testCwd,
+    command: commandPrefix(data.testCommand).concat(failedArgs),
+    env: opts.env,
+    data: {
+      ...data,
+      baseline: true,
+      testPath: "",
+      selection: { selectedPaths: failedArgs },
+    },
+  });
+
+  const parsed = playwrightReport.parseReportFromWorktree(testCwd);
+  try {
+    await artifactRedactor.collectAttempt({
+      runId: data.runId,
+      attempt: Number(data.attempt) || 1,
+      label: `attempt-${Number(data.attempt) || 1}-baseline`,
+      testCwd,
+      appCwd,
+    });
+  } catch (err) {
+    console.error("[playwright] baseline artifact collect failed:", err && err.message);
+  }
+
+  const changedConfig =
+    opts.changedConfig ||
+    baseline.collectRunConfig({
+      testCwd: opts.testCwd,
+      env: opts.env,
+      args: failedArgs,
+      report,
+    });
+  const baselineConfig = baseline.collectRunConfig({
+    testCwd,
+    env: opts.env,
+    args: failedArgs,
+    report: parsed,
+  });
+  const comparison = baseline.compareBaseline({
+    changed: report,
+    baseline: parsed,
+    changedConfig,
+    baselineConfig,
+    selection: data.selection,
+    changedFiles: data.changedFiles,
+    baselineStatus: suite && suite.failureClass === "env" ? "env" : undefined,
+  });
+  return {
+    report: parsed,
+    comparison,
+    suite,
+    config: baselineConfig,
+    testCwd,
+    appCwd,
+  };
+}
+
 module.exports = {
   VITE_PORTS,
   copyCredentialFiles,
@@ -398,6 +509,7 @@ module.exports = {
   installHost,
   browsersHost,
   runSuiteHost,
+  runBaselineHost,
   startViteHost,
   reserveAppPort: hostProcess.reservePort,
   resetPortLocks: hostProcess.resetPortLocks,
