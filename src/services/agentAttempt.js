@@ -124,14 +124,17 @@ async function handleAgentJob(job, deps) {
     return { started: false };
   }
 
-  const spec = buildAgentContainerSpec({
-    worktreePath: data.worktreePath,
-    agentExecutionId: data.agentExecutionId,
-    apiKey: config.cursorApiKey,
-    model: config.cursorModel,
-    egressHosts: deps.egressHosts || config.cursorEgressHosts,
-    image: deps.image,
-  });
+  const spec =
+    data.runtime === "host"
+      ? null
+      : buildAgentContainerSpec({
+          worktreePath: data.worktreePath,
+          agentExecutionId: data.agentExecutionId,
+          apiKey: config.cursorApiKey,
+          model: config.cursorModel,
+          egressHosts: deps.egressHosts || config.cursorEgressHosts,
+          image: deps.image,
+        });
 
   try {
     const result = await startContainer(spec, data);

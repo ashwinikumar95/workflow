@@ -52,7 +52,18 @@ function classifyPlaywrightOutcome({
   timedOut,
   testCode,
   reportPresent,
+  failureClass,
+  reason,
 }) {
+  if (failureClass === "env" || reason === "env") {
+    return {
+      status: "failed",
+      failureClass: "env",
+      branch: "false",
+      reportPresent: false,
+      reason: reason || "env",
+    };
+  }
   if (lockfileError) {
     return {
       status: "bootstrap-failed",

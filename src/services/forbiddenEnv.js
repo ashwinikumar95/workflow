@@ -1,12 +1,26 @@
+function profileCredentialRefs() {
+  try {
+    const { parseProfiles } = require("./projectRegistry");
+    return Object.values(parseProfiles()).map((profile) => profile.repo.credentialRef);
+  } catch {
+    return [];
+  }
+}
+
 /** Names that must never appear in a git push child or a sandbox container. */
 const FORBIDDEN_ENV = [
-  "MONGODB_URI",
-  "JWT_SECRET",
-  "JIRA_API_TOKEN",
-  "ANALYSIS_API_KEY",
-  "SLACK_WEBHOOK_URL",
-  "GITHUB_TOKEN",
-  "REDIS_PASSWORD",
+  ...new Set([
+    "MONGODB_URI",
+    "JWT_SECRET",
+    "JIRA_API_TOKEN",
+    "JIRA_EMAIL",
+    "JIRA_WEBHOOK_SECRET",
+    "ANALYSIS_API_KEY",
+    "SLACK_WEBHOOK_URL",
+    "GITHUB_TOKEN",
+    "REDIS_PASSWORD",
+    ...profileCredentialRefs(),
+  ]),
 ];
 
 function assertEnvAllowed(env) {

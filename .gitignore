@@ -29,3 +29,6 @@ coverage/
 
 # Optional: local MongoDB data if you ever run it from the repo
 # data/
+
+# Graphify knowledge graph (generated locally)
+graphify-out/

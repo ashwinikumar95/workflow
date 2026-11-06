@@ -132,6 +132,7 @@ async function handlePlaywrightJob(job, deps) {
     env,
     testedSha: data.testedSha,
     command: data.testCommand,
+    data,
   });
   const outcome = classifyPlaywrightOutcome({
     installCode: 0,
@@ -139,6 +140,8 @@ async function handlePlaywrightJob(job, deps) {
     timedOut: Boolean(suite && suite.timedOut),
     testCode: suite ? suite.code : 1,
     reportPresent: Boolean(suite && suite.reportPresent),
+    failureClass: suite && suite.failureClass,
+    reason: suite && suite.reason,
   });
   await enqueueSettle(settlePayload(data, outcome, suite));
   return {

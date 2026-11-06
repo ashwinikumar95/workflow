@@ -59,6 +59,11 @@ const workflowSchema = new mongoose.Schema({
     keepWorktreeOnFailure: { type: Boolean, default: false },
     worktreeDays: { type: Number, default: 7 },
   },
+
+  runtime: {
+    type: String,
+    enum: ["docker", "host"],
+  },
 }, { timestamps: true });
 
 module.exports =

@@ -24,6 +24,26 @@ function nodeRole(node) {
   return "";
 }
 
+function nodeRuntime(node, runState) {
+  if (node && node.config && typeof node.config.runtime === "string" && node.config.runtime) {
+    return node.config.runtime;
+  }
+  if (runState && runState.workflow && typeof runState.workflow.runtime === "string" && runState.workflow.runtime) {
+    return runState.workflow.runtime;
+  }
+  return undefined;
+}
+
+function optionalRepoLocation(workflow, repository) {
+  if (repository && typeof repository.location === "string" && repository.location.trim()) {
+    return repository.location.trim();
+  }
+  if (workflow && workflow.repository && typeof workflow.repository.location === "string") {
+    return workflow.repository.location;
+  }
+  return "";
+}
+
 function externalFor(runState, role) {
   const external = runState && runState.external ? runState.external : {};
   if (!role) return external;
@@ -152,6 +172,7 @@ async function cursorAgentNode(node, input, runState) {
       externalJobId,
       agentExecutionId,
       preAgentSha: head,
+      runtime: nodeRuntime(node, runState),
     },
   };
 }
@@ -183,6 +204,12 @@ async function playwrightNode(node, input, runState) {
   const external = externalPatch(role, { testedSha: ready.head, worktreePath, worktreeState: "ready" });
   if (runState.checkpointExternal) await runState.checkpointExternal(external);
   const testRepository = cfg.testRepository && typeof cfg.testRepository === "object" ? cfg.testRepository : {};
+  const sourceRepoPath =
+    typeof cfg.sourceRepoPath === "string" && cfg.sourceRepoPath
+      ? cfg.sourceRepoPath
+      : cfg.strategy === "in-repo"
+        ? optionalRepoLocation(runState.workflow, nodeRepository(node))
+        : testRepository.location || optionalRepoLocation(runState.workflow, nodeRepository(node));
   return {
     control: "wait",
     kind: "playwright",
@@ -203,7 +230,13 @@ async function playwrightNode(node, input, runState) {
       appCommand: Array.isArray(cfg.appCommand) ? cfg.appCommand : [],
       readiness: cfg.readiness || "/",
       testCommand: Array.isArray(cfg.testCommand) ? cfg.testCommand : [],
+      credentialFiles: Array.isArray(cfg.credentialFiles) ? cfg.credentialFiles : [],
+      sourceRepoPath,
+      appCredentialFiles: Array.isArray(cfg.appCredentialFiles) ? cfg.appCredentialFiles : [],
+      appSourceRepoPath: typeof cfg.appSourceRepoPath === "string" ? cfg.appSourceRepoPath : "",
+      app: typeof cfg.app === "string" ? cfg.app : "",
       preAgentSha,
+      runtime: nodeRuntime(node, runState),
     },
   };
 }
