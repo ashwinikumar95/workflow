@@ -12,6 +12,11 @@ if (fs.existsSync(envPath)) {
 
 process.env.WORKFLOW_WORKER_AUTOSTART = "false";
 
+// Keep the real Slack webhook out of the test suite. Phase 6 tests mock the sender.
+if (!process.env.SLACK_TEST_WEBHOOK_URL) {
+  process.env.SLACK_WEBHOOK_URL = "";
+}
+
 function databaseName(uri) {
   if (!uri) return "";
   const withoutQuery = String(uri).split("?")[0];

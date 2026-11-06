@@ -87,6 +87,9 @@ async function cancelRun(runId, deps = {}) {
     { returnDocument: "after" }
   );
 
+  const slack = require("./slackService");
+  await slack.emit(run._id, "cancelled", { reason: "cancelled" });
+
   return { http: 200, run: updated || run };
 }
 

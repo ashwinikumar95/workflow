@@ -483,7 +483,7 @@ Write each one down as it's settled, mostly in Phase 0.
 - [x] Phase 3: host runtime
 - [x] Phase 4: locks, states, recovery, cancel and retry
 - [x] Phase 5: Jira intake
-- [ ] Phase 6: Slack events
+- [x] Phase 6: Slack events
 - [ ] Phase 7: rules, plan mode, approval
 - [ ] Phase 8: test selection, reports, failure handling
 - [ ] Phase 9: templates, PRs, MF pilot

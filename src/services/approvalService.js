@@ -36,6 +36,14 @@ async function recordDecision(runId, decision, userId) {
   if (!outcome.matched) {
     return { http: 409, error: "Decision already recorded" };
   }
+  if (decision === "rejected") {
+    const slack = require("./slackService");
+    await slack.emit(run._id, "plan_rejected", {
+      reason: "plan rejected",
+      stage: "awaiting_approval",
+      nodeId: run.wait && run.wait.nodeId,
+    });
+  }
   if (!outcome.enqueued) {
     return { http: 503, error: "Resume enqueue failed" };
   }

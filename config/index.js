@@ -182,6 +182,13 @@ module.exports = {
   /** Optional: Slack incoming webhook for Notify node + run failure alerts */
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL || undefined,
 
+  /** Public origin for run links in Slack (no trailing slash). */
+  get appBaseUrl() {
+    const raw = process.env.APP_BASE_URL || process.env.PUBLIC_APP_URL || "";
+    if (raw.trim()) return raw.trim().replace(/\/$/, "");
+    return `http://localhost:${this.port}`;
+  },
+
   /** BullMQ / ioredis — used by `src/services/queue.js` and `src/workers/worker.js` */
   redisHost: process.env.REDIS_HOST || "127.0.0.1",
   redisPort: Number(process.env.REDIS_PORT) || 6379,

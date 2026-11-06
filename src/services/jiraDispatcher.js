@@ -69,6 +69,13 @@ async function startTicket(issue, profile, options = {}) {
   const source = options.source || "bucket";
   const eligibility = assessEligibility(issue, profile, { source });
   if (!eligibility.ok) {
+    const slack = require("./slackService");
+    await slack.emit(null, "skipped_ineligible", {
+      jiraKey: issue && issue.key,
+      project: profile && profile.jiraKey,
+      reason: eligibility.reason,
+      stage: issue && issue.status,
+    });
     return { ok: false, reason: eligibility.reason, jiraKey: issue && issue.key };
   }
 
@@ -197,6 +204,15 @@ async function pollProfile(profile, deps, dryRun, report) {
     });
     if (!eligibility.ok) {
       report.ineligible.push({ key: issue.key, reason: eligibility.reason, status: issue.status });
+      if (!dryRun) {
+        const slack = require("./slackService");
+        await slack.emit(null, "skipped_ineligible", {
+          jiraKey: issue.key,
+          project: profile.jiraKey,
+          reason: eligibility.reason,
+          stage: issue.status,
+        });
+      }
       continue;
     }
     report.eligible.push({ key: issue.key, fingerprint: issue.fingerprint, status: issue.status });

@@ -81,6 +81,10 @@ function startWorkflowWorker() {
       "error:",
       err.message
     );
+    const slack = require("../services/slackService");
+    slack.emitFromJob(job, err).catch((notifyErr) => {
+      console.error("[Worker] Slack crash notify failed:", notifyErr.message);
+    });
   });
 
   worker.on("error", (err) => {
@@ -102,6 +106,10 @@ function startWorkflowWorker() {
     const resourceLocks = require("../services/resourceLocks");
     resourceLocks.heartbeat().catch((err) => {
       console.error("[Worker] resource lock heartbeat failed:", err.message);
+    });
+    const slack = require("../services/slackService");
+    slack.retryPending().catch((err) => {
+      console.error("[Worker] Slack retry failed:", err.message);
     });
   }, 5000);
   if (typeof pendingTimer.unref === "function") pendingTimer.unref();

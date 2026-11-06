@@ -108,6 +108,8 @@ async function markInterrupted(ticket, run, reason, details = {}) {
       { _id: run._id, status: { $nin: ["success", "cancelled"] } },
       { $set: { status: "interrupted", endedAt: new Date() } }
     );
+    const slack = require("./slackService");
+    await slack.emit(run._id, "interrupted", { reason, stage: ticket && ticket.stage });
   }
   if (typeof details.runCursor === "function") {
     // recovery of implementing must never call this; present only so tests can spy

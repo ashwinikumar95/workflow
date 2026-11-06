@@ -29,7 +29,7 @@ async function clearTestData() {
   assertTestDatabase();
   await mongoose.connection.collection("runs").deleteMany({});
   await mongoose.connection.collection("workflows").deleteMany({});
-  const extras = ["ticketruns", "resourcelocks"];
+  const extras = ["ticketruns", "resourcelocks", "slack_outbox"];
   for (const name of extras) {
     try {
       await mongoose.connection.collection(name).deleteMany({});

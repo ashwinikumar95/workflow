@@ -37,6 +37,12 @@ const runSchema = new mongoose.Schema({
   /** Later lifecycle fields (worktree, agent, Playwright). Redacted on read. */
   external: mongoose.Schema.Types.Mixed,
 
+  /** Slack events keyed by eventId. Stored before send so retries cannot duplicate. */
+  notifications: mongoose.Schema.Types.Mixed,
+
+  /** Event ids whose Slack send is pending or failed. */
+  notificationPending: [String],
+
   startedAt: Date,
   endedAt: Date,
 

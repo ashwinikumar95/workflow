@@ -255,6 +255,11 @@ async function playwrightNode(node, input, runState) {
   const ready = await git.readyForPlaywright(worktreePath, preAgentSha);
   if (!ready.ok) {
     await removeQuiet(state);
+    const slack = require("../services/slackService");
+    await slack.emit(runState.runId, "playwright_failed", {
+      reason: ready.reason || "worktree not ready for playwright",
+      stage: "playwright",
+    });
     return { ...base, branch: "false" };
   }
   const external = externalPatch(role, { testedSha: ready.head, worktreePath, worktreeState: "ready" });
@@ -303,12 +308,18 @@ async function githubPrNode(node, input, runState) {
   const repository = nodeRepository(node);
   const external = externalFor({ ...runState, node }, role);
   const head = await git.revParse(external.worktreePath);
-  assertPullRequestGate({
-    external: runState.external,
-    predecessorId: runState.predecessorId,
-    head,
-    role,
-  });
+  try {
+    assertPullRequestGate({
+      external: runState.external,
+      predecessorId: runState.predecessorId,
+      head,
+      role,
+    });
+  } catch (err) {
+    const slack = require("../services/slackService");
+    await slack.emit(runState.runId, "gate_failed", { reason: err.message, stage: "pr_open" });
+    throw err;
+  }
   const token = tokenFromWorkflow(runState.workflow, repository);
   await git.pushBranch({
     worktreePath: external.worktreePath,
@@ -324,6 +335,12 @@ async function githubPrNode(node, input, runState) {
     base: git.resolveBaseBranch(runState.workflow, repository),
     body: "",
     token,
+  });
+  const slack = require("../services/slackService");
+  await slack.emit(runState.runId, "pr_created", {
+    reason: "pull request opened",
+    prUrl: url,
+    stage: "pr_open",
   });
   if (runState.checkpointExternal) {
     await runState.checkpointExternal(externalPatch(role, { prUrl: url, worktreeState: "removing" }));

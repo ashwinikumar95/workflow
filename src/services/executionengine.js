@@ -442,19 +442,11 @@ async function loadOrCreateRun(workflowId, jobId) {
   }
 }
 
-async function maybeNotifyRunFailure(workflowId, message) {
-  const axios = require("axios");
-  const url = config.slackWebhookUrl;
-  if (!url) return;
-  try {
-    await axios.post(
-      url,
-      { text: `Workflow run failed (${String(workflowId)}): ${message}` },
-      { timeout: 8000 }
-    );
-  } catch (e) {
-    console.error("[executeWorkflow] Failure notify to Slack failed:", e.message);
-  }
+async function maybeNotifyRunFailure(runId, message) {
+  const slack = require("./slackService");
+  await slack.emit(runId, slack.typeFromFailure(message), {
+    reason: message,
+  });
 }
 
 function stageForNode(node) {
@@ -526,6 +518,8 @@ async function persistCancelled(runId, token, patch) {
     log: patch.log,
   });
   if (!saved) throw claimBusy();
+  const slack = require("./slackService");
+  await slack.emit(runId, "cancelled", { reason: "cancelled" });
   return Run.findById(runId);
 }
 
@@ -817,7 +811,7 @@ async function walkClaimed(workflow, run, token, position, leaseMs) {
       });
       if (!failed) throw claimBusy();
       await cleanupWorktree(run._id, workflow);
-      await maybeNotifyRunFailure(workflow._id, thrown.message);
+      await maybeNotifyRunFailure(run._id, thrown.message);
       throw thrown;
     }
 
@@ -859,6 +853,14 @@ async function walkClaimed(workflow, run, token, position, leaseMs) {
         },
       });
       if (!saved) throw claimBusy();
+      if (output.kind === "approval") {
+        const slack = require("./slackService");
+        await slack.emit(run._id, "waiting_for_approval", {
+          nodeId: currentNode.id,
+          stage: "awaiting_approval",
+          reason: "waiting for approval",
+        });
+      }
       if (output.kind === "agent" || output.kind === "playwright") {
         await enqueueExternalJob(saved, output);
       }

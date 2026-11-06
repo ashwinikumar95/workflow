@@ -142,6 +142,19 @@ function samePendingWait(run, args) {
   );
 }
 
+function slackForPlaywrightSettle(args) {
+  const result = args && args.result && typeof args.result === "object" ? args.result : {};
+  if (args && args.kind !== "playwright") return null;
+  if (result.branch === "true") return null;
+  const failureClass = result.failureClass || (args.playwrightByNode && args.playwrightByNode.entry && args.playwrightByNode.entry.failureClass);
+  const type = failureClass === "env" ? "env_failed" : "playwright_failed";
+  return {
+    type,
+    reason: result.reason || failureClass || "playwright failed",
+    stage: "playwright",
+  };
+}
+
 /**
  * Atomic completion, then one resume enqueue.
  * A repeated call does not change `wait.completion`. When `enqueuedAt` is still
@@ -150,6 +163,14 @@ function samePendingWait(run, args) {
 async function settleWait(args, options = {}) {
   const updated = await completeExternalWait(args);
   if (updated) {
+    const slackEvent = slackForPlaywrightSettle(args);
+    if (slackEvent) {
+      const slack = require("./slackService");
+      await slack.emit(updated._id, slackEvent.type, {
+        reason: slackEvent.reason,
+        stage: slackEvent.stage,
+      });
+    }
     try {
       await enqueueResumeJob(updated);
       const stamped = await Run.findById(updated._id);

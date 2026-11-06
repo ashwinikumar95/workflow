@@ -148,6 +148,7 @@ function redactRunForResponse(run) {
     }
   }
   if ("external" in plain) out.external = redactValue(plain.external);
+  if ("notifications" in plain) out.notifications = redactValue(plain.notifications);
   return out;
 }
 
