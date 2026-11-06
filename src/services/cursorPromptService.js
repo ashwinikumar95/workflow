@@ -104,6 +104,42 @@ function buildImplementPrompt({ issue, plan, manifest, feedback, artifactPath } 
   return `${instructions}${untrustedBlock(issue, Buffer.byteLength(instructions, "utf8"))}`;
 }
 
+function classificationSummary(classification) {
+  if (!classification || typeof classification !== "object") return "";
+  const value = classification.value && typeof classification.value === "object" ? classification.value : classification;
+  const routing = classification.routing && typeof classification.routing === "object" ? classification.routing : {};
+  return JSON.stringify({
+    classification: value.classification || "",
+    summary: value.summary || "",
+    evidence: value.evidence || [],
+    action: routing.action || value.recommendedAction || "",
+  });
+}
+
+function buildLinkedScriptPrompt({ issue, plan, manifest, classification, feedback, artifactPath } = {}) {
+  const rules = rulesBlock(manifest);
+  const instructions = [
+    "Update Playwright tests and helpers in this automation worktree so they match the application change.",
+    "Stay in this automation worktree. Do not change application code.",
+    "Do not weaken, skip, or delete tests to hide an application bug.",
+    "If the failure is an application bug, record that in deviations and make no script workaround.",
+    "Commit your changes in this worktree. Do not push.",
+    ...policyLines(),
+    `Write valid JSON to this path: ${asString(artifactPath)}`,
+    'Schema: { "summary": "", "filesChanged": [], "rulesApplied": [], "deviations": [] }',
+    "",
+    "Approved app plan (context only; do not implement app files here):",
+    JSON.stringify(plan && typeof plan === "object" ? plan : {}),
+    "",
+    "Failure classification:",
+    classificationSummary(classification),
+    "",
+    feedback ? `Feedback from the previous attempt:\n${asString(feedback)}\n` : "",
+    rules,
+  ].join("\n");
+  return `${instructions}${untrustedBlock(issue, Buffer.byteLength(instructions, "utf8"))}`;
+}
+
 function buildReviewPrompt({ issue, manifest, diff, mechanical, artifactPath } = {}) {
   const rules = rulesBlock(manifest);
   const instructions = [
@@ -129,6 +165,7 @@ module.exports = {
   buildPrompt,
   buildPlanPrompt,
   buildImplementPrompt,
+  buildLinkedScriptPrompt,
   buildReviewPrompt,
   PROMPT_CAP_BYTES,
   START,

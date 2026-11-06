@@ -55,6 +55,9 @@ function eventIdFor(type, details = {}) {
   if (kind === "notify" && details.nodeId) {
     return sanitizeEventId(`notify_${details.nodeId}`);
   }
+  if (kind === "pr_created" && details.role) {
+    return sanitizeEventId(`pr_created_${details.role}`);
+  }
   return kind;
 }
 

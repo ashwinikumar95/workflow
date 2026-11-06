@@ -177,7 +177,9 @@ function validatePullRequestPaths(nodes, edges) {
     const incoming = edges.filter((edge) => edge.to === node.id);
     for (const edge of incoming) {
       const source = nodes.find((item) => item.id === edge.from);
-      if (!source || source.type !== "playwright" || edge.condition !== "true") {
+      const fromPlaywright = source && source.type === "playwright" && edge.condition === "true";
+      const fromPr = source && source.type === "githubPr";
+      if (!fromPlaywright && !fromPr) {
         return {
           ok: false,
           message: "githubPr is reachable without a Playwright true edge",

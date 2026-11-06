@@ -271,7 +271,7 @@ describe("phase 3 unit", () => {
     const source = fs.readFileSync(path.join(__dirname, "..", "src", "services", "githubPrService.js"), "utf8");
     assert.equal(source.includes(".merge"), false);
     assert.equal(source.includes("pulls.merge"), false);
-    assert.deepEqual(Object.keys(github), ["openPullRequest"]);
+    assert.deepEqual(Object.keys(github), ["openPullRequest", "updatePullRequestBody", "pullNumberFromUrl"]);
     let created = 0;
     const url = await github.openPullRequest(
       { owner: "acme", repo: "app", head: "wf/PROJ-1/abc", base: "main", title: "Fix" },

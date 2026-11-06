@@ -6,6 +6,7 @@
     "fetch",
     "claim",
     "gitApp",
+    "gitAuto",
     "promptPlan",
     "agentPlan",
     "approvePlan",
@@ -14,7 +15,9 @@
   ],
   "verify": ["rules", "reviewPrompt", "review", "select", "playwright"],
   "fix": ["prompt", "agent"],
+  "linked": ["lgit", "lprompt", "lagent"],
   "success": ["pr", "notifyPr", "jiraReview"],
+  "linkedSuccess": ["autoPr", "pr", "notifyPr", "jiraReview"],
   "stops": {
     "plan": ["notifyPlanFailed", "jiraPlanFailed"],
     "rejected": ["notifyPlanRejected", "jiraPlanRejected"],
@@ -22,6 +25,7 @@
     "env": ["notifyEnv", "jiraEnv"],
     "gate": ["notifyGate", "jiraGate"],
     "rules": ["notifyRules", "jiraRules"],
-    "playwright": ["notifyPlaywright", "jiraPlaywright"]
+    "playwright": ["notifyPlaywright", "jiraPlaywright"],
+    "appBug": ["notifyAppBug", "jiraAppBug"]
   }
 }

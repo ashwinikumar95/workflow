@@ -338,6 +338,64 @@ async function createWorktree({ repoPath, runId, nodeId, issueKey, baseBranch, w
   return { path: created, branch, repoPath: repoReal };
 }
 
+async function createCleanWorktree({ repoPath, runId, nodeId, baseBranch, worktreesDir }) {
+  const segment = segmentFor(runId, nodeId);
+  const base = await realDir(worktreesDir || config.worktreesDir);
+  const candidate = path.resolve(base, segment);
+  if (escapes(base, candidate)) {
+    const err = new Error("Worktree path escapes WORKTREES_DIR");
+    err.code = "WORKTREE_PATH";
+    throw err;
+  }
+  await refuseLink(candidate);
+  const repoReal = await fs.promises.realpath(repoPath);
+  const shaResult = await runGit(["-C", repoPath, "rev-parse", baseBranch]);
+  const sha = String(shaResult.stdout || "").trim();
+  if (!sha) throw new Error("Detached worktree base branch has no SHA");
+
+  let stats = null;
+  try {
+    stats = await fs.promises.lstat(candidate);
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
+
+  if (stats && stats.isDirectory()) {
+    const real = await fs.promises.realpath(candidate);
+    if (escapes(base, real) || isInside(repoReal, real)) {
+      const err = new Error("Existing worktree path failed the realpath check");
+      err.code = "WORKTREE_PATH";
+      throw err;
+    }
+    const registered = await porcelainPaths(repoPath);
+    let current = "";
+    let head = "";
+    try {
+      current = await abbrevHead(real);
+      head = await revParse(real);
+    } catch {
+      current = "";
+    }
+    if (registered.includes(real) && current === "HEAD" && head === sha) {
+      return { path: real, branch: "", repoPath: repoReal, detached: true };
+    }
+    const err = new Error("Existing worktree is not a clean detached checkout");
+    err.code = "WORKTREE_MISMATCH";
+    throw err;
+  }
+
+  if (isInside(repoReal, candidate)) {
+    throw new Error("Worktree must not be inside the main checkout");
+  }
+
+  await runGit(["-C", repoPath, "worktree", "add", "--detach", candidate, sha]);
+  const created = await fs.promises.realpath(candidate);
+  if (escapes(base, created) || isInside(repoReal, created)) {
+    throw new Error("Created worktree resolved outside WORKTREES_DIR");
+  }
+  return { path: created, branch: "", repoPath: repoReal, detached: true };
+}
+
 async function openExistingWorktree({ repoPath, runId, nodeId, issueKey, worktreesDir }) {
   const segment = segmentFor(runId, nodeId);
   const branch = branchForRun(issueKey, runId);
@@ -589,6 +647,7 @@ module.exports = {
   branchForRun,
   assertBranchName,
   createWorktree,
+  createCleanWorktree,
   openExistingWorktree,
   removeWorktree,
   keepsWorktreeOnFailure,

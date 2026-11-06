@@ -158,8 +158,14 @@ async function rememberPrUrl(runId, url, role) {
   if (!runId || !url) return;
   try {
     const TicketRun = require("../models/TicketRun");
-    const field = role === "automation" ? "linkedPrUrl" : "prUrl";
-    await TicketRun.updateOne({ runId: String(runId) }, { $set: { [field]: url } });
+    const patch = role === "automation" ? { linkedPrUrl: url } : { prUrl: url };
+    await TicketRun.updateOne({ runId: String(runId) }, { $set: patch });
+    if (role === "automation") {
+      await TicketRun.updateOne(
+        { runId: String(runId), $or: [{ prUrl: { $exists: false } }, { prUrl: null }, { prUrl: "" }] },
+        { $set: { prUrl: url } }
+      );
+    }
   } catch {
     // TicketRun is optional for ad-hoc workflows.
   }
@@ -316,13 +322,24 @@ async function cursorPromptNode(node, input, runState) {
       artifactPath: reviewPath(runId),
     });
   } else if (mode === "implement" || mode === "fix") {
-    prompt = prompts.buildImplementPrompt({
-      issue: base.jira || {},
-      plan: base.plan,
-      manifest,
-      feedback: base.feedback,
-      artifactPath: resultPath(runId),
-    });
+    if (cfg.linkedScript) {
+      prompt = prompts.buildLinkedScriptPrompt({
+        issue: base.jira || {},
+        plan: base.plan,
+        manifest,
+        classification: base.failureClassification,
+        feedback: base.feedback,
+        artifactPath: resultPath(runId),
+      });
+    } else {
+      prompt = prompts.buildImplementPrompt({
+        issue: base.jira || {},
+        plan: base.plan,
+        manifest,
+        feedback: base.feedback,
+        artifactPath: resultPath(runId),
+      });
+    }
   } else {
     prompt = prompts.buildPrompt(base.jira || {}, base.analysis || {});
   }
@@ -333,22 +350,48 @@ async function gitBranchNode(node, input, runState) {
   const base = asObject(input);
   const repository = nodeRepository(node);
   const role = nodeRole(node);
-  const created = await git.createWorktree({
-    repoPath: git.resolveRepoPath(runState.workflow, repository),
-    runId: runState.runId,
-    nodeId: runState.nodeId,
-    issueKey: base.jira && base.jira.key,
-    baseBranch: git.resolveBaseBranch(runState.workflow, repository),
-    worktreesDir: config.worktreesDir,
-  });
+  const cfg = node && node.config && typeof node.config === "object" ? node.config : {};
+  const repoPath = git.resolveRepoPath(runState.workflow, repository);
+  const baseBranch = git.resolveBaseBranch(runState.workflow, repository);
+  const created = cfg.detached
+    ? await git.createCleanWorktree({
+        repoPath,
+        runId: runState.runId,
+        nodeId: runState.nodeId,
+        baseBranch,
+        worktreesDir: config.worktreesDir,
+      })
+    : await git.createWorktree({
+        repoPath,
+        runId: runState.runId,
+        nodeId: runState.nodeId,
+        issueKey: base.jira && base.jira.key,
+        baseBranch,
+        worktreesDir: config.worktreesDir,
+      });
+  const credentialFiles = Array.isArray(cfg.credentialFiles) ? cfg.credentialFiles : [];
+  if (credentialFiles.length) {
+    const { copyCredentialFiles } = require("../services/hostRunners");
+    const copied = await copyCredentialFiles({
+      sourceRepoPath: created.repoPath,
+      destWorktree: created.path,
+      credentialFiles,
+    });
+    if (copied && copied.failureClass === "env") {
+      const err = new Error("Missing credentials for worktree");
+      err.code = "ENV";
+      throw err;
+    }
+  }
   const fields = {
     worktreePath: created.path,
-    branch: created.branch,
+    branch: created.branch || "",
     repoPath: created.repoPath,
     worktreeState: "ready",
+    detached: created.detached === true,
   };
   if (runState.checkpointExternal) await runState.checkpointExternal(externalPatch(role, fields));
-  return { ...base, worktreePath: created.path, branch: created.branch };
+  return { ...base, worktreePath: created.path, branch: created.branch || "" };
 }
 
 async function finishReadOnlyAgent(node, base, runState, mode) {
@@ -613,9 +656,11 @@ async function playwrightNode(node, input, runState) {
     throw new Error("Playwright target is required");
   }
   const active = externalFor(state, role);
-  const worktreePath = role ? active.worktreePath : active.worktreePath || base.worktreePath;
+  const appExt = externalFor(state, "app");
+  const autoExt = externalFor(state, "automation");
+  const changedPath = role ? active.worktreePath : active.worktreePath || base.worktreePath;
   const preAgentSha = active.preAgentSha;
-  const ready = await git.readyForPlaywright(worktreePath, preAgentSha);
+  const ready = await git.readyForPlaywright(changedPath, preAgentSha);
   if (!ready.ok) {
     await removeQuiet(state);
     const slack = require("../services/slackService");
@@ -630,9 +675,46 @@ async function playwrightNode(node, input, runState) {
     await removeQuiet(state);
     return guardOutput(base, guarded);
   }
-  const external = externalPatch(role, { testedSha: ready.head, worktreePath, worktreeState: "ready" });
-  if (runState.checkpointExternal) await runState.checkpointExternal(external);
   const testRepository = cfg.testRepository && typeof cfg.testRepository === "object" ? cfg.testRepository : {};
+  const appWorktree = appExt.worktreePath || (role === "app" ? changedPath : changedPath);
+  const testWorktree =
+    autoExt.worktreePath ||
+    (cfg.strategy === "in-repo" ? changedPath : testRepository.location);
+  let appHead = "";
+  let autoHead = "";
+  try {
+    if (appExt.worktreePath) appHead = await git.revParse(appExt.worktreePath);
+  } catch {
+    appHead = "";
+  }
+  try {
+    if (autoExt.worktreePath) autoHead = await git.revParse(autoExt.worktreePath);
+  } catch {
+    autoHead = "";
+  }
+  if (!appHead && role === "app") appHead = ready.head;
+  if (!autoHead && role === "automation") autoHead = ready.head;
+  const testedShas = {};
+  if (appHead) testedShas.app = appHead;
+  if (autoHead) testedShas.automation = autoHead;
+  const shaPatch = { repos: {} };
+  if (appExt.worktreePath && appHead) {
+    shaPatch.repos.app = { testedSha: appHead, worktreePath: appExt.worktreePath, worktreeState: "ready" };
+  }
+  if (autoExt.worktreePath && autoHead) {
+    shaPatch.repos.automation = {
+      testedSha: autoHead,
+      worktreePath: autoExt.worktreePath,
+      worktreeState: "ready",
+    };
+  }
+  if (role && !shaPatch.repos[role]) {
+    shaPatch.repos[role] = { testedSha: ready.head, worktreePath: changedPath, worktreeState: "ready" };
+  } else if (role && shaPatch.repos[role]) {
+    shaPatch.repos[role].testedSha = ready.head;
+  }
+  const external = Object.keys(shaPatch.repos).length ? shaPatch : { testedSha: ready.head, worktreePath: changedPath, worktreeState: "ready" };
+  if (runState.checkpointExternal) await runState.checkpointExternal(external);
   const sourceRepoPath =
     typeof cfg.sourceRepoPath === "string" && cfg.sourceRepoPath
       ? cfg.sourceRepoPath
@@ -654,8 +736,6 @@ async function playwrightNode(node, input, runState) {
         : profile && profile.kind === "app"
           ? "app"
           : "";
-  const appExt = externalFor(state, "app");
-  const autoExt = externalFor(state, "automation");
   const baselineRepoPath =
     ticketKind === "automation"
       ? autoExt.repoPath || active.repoPath
@@ -667,7 +747,7 @@ async function playwrightNode(node, input, runState) {
   return {
     control: "wait",
     kind: "playwright",
-    output: { ...base, testedSha: ready.head, selection },
+    output: { ...base, testedSha: ready.head, testedShas, selection },
     external,
     job: {
       runId: runState.runId,
@@ -677,9 +757,11 @@ async function playwrightNode(node, input, runState) {
       strategy: cfg.strategy,
       target: cfg.target,
       testedSha: ready.head,
-      appWorktree: worktreePath,
-      worktreePath,
-      testWorktree: cfg.strategy === "in-repo" ? worktreePath : testRepository.location,
+      testedShas,
+      testedWorktree: changedPath,
+      appWorktree,
+      worktreePath: changedPath,
+      testWorktree,
       testPath: typeof cfg.testPath === "string" ? cfg.testPath : "",
       appCommand: Array.isArray(cfg.appCommand) ? cfg.appCommand : [],
       readiness: cfg.readiness || "/",
@@ -705,6 +787,9 @@ async function githubPrNode(node, input, runState) {
   const role = nodeRole(node);
   const repository = nodeRepository(node);
   const external = externalFor({ ...runState, node }, role);
+  if (external.detached || !external.branch) {
+    throw new Error("Cannot open a pull request from a detached worktree");
+  }
   const guarded = await applyGuard(node, base, runState, "push");
   if (!guarded.ok) return guardOutput(base, guarded);
   const head = await git.revParse(external.worktreePath);
@@ -720,6 +805,9 @@ async function githubPrNode(node, input, runState) {
     await slack.emit(runState.runId, "gate_failed", { reason: err.message, stage: "pr_open" });
     throw err;
   }
+  const otherRole = role === "app" ? "automation" : role === "automation" ? "app" : "";
+  const other = otherRole ? externalFor({ ...runState, node }, otherRole) : {};
+  const linkedUrl = (other && other.prUrl) || base.linkedPrUrl || base.prUrl || "";
   const token = tokenFromWorkflow(runState.workflow, repository);
   await git.pushBranch({
     worktreePath: external.worktreePath,
@@ -727,27 +815,45 @@ async function githubPrNode(node, input, runState) {
     testedSha: external.testedSha,
     token,
   });
+  const owner = (repository && repository.owner) || config.githubOwner;
+  const repo = (repository && repository.repo) || config.githubRepo;
   const url = await githubPrService.openPullRequest({
-    owner: (repository && repository.owner) || config.githubOwner,
-    repo: (repository && repository.repo) || config.githubRepo,
+    owner,
+    repo,
     title: buildPrTitle(base, external.branch),
     head: external.branch,
     base: git.resolveBaseBranch(runState.workflow, repository),
-    body: buildPrBody(base, { linkedPrUrl: base.linkedPrUrl }),
+    body: buildPrBody(base, { linkedPrUrl: linkedUrl }),
     token,
   });
   if (runState.checkpointExternal) {
-    await runState.checkpointExternal(externalPatch(role, { prUrl: url }));
+    await runState.checkpointExternal(externalPatch(role, { prUrl: url, prOwner: owner, prRepo: repo }));
   }
   await rememberPrUrl(runState.runId, url, role);
+  if (other && other.prUrl && other.prOwner && other.prRepo) {
+    try {
+      await githubPrService.updatePullRequestBody({
+        owner: other.prOwner,
+        repo: other.prRepo,
+        url: other.prUrl,
+        body: buildPrBody(base, { linkedPrUrl: url }),
+        token,
+      });
+    } catch (err) {
+      console.error("[githubPr] linked body update failed:", err && err.message);
+    }
+  }
   const slack = require("../services/slackService");
   await slack.emit(runState.runId, "pr_created", {
     reason: "pull request opened",
     prUrl: url,
+    role: role || undefined,
     stage: "pr_open",
   });
   if (runState.checkpointExternal) {
-    await runState.checkpointExternal(externalPatch(role, { prUrl: url, worktreeState: "removing" }));
+    await runState.checkpointExternal(
+      externalPatch(role, { prUrl: url, prOwner: owner, prRepo: repo, worktreeState: "removing" })
+    );
   }
   try {
     await git.removeWorktree({
@@ -758,7 +864,14 @@ async function githubPrNode(node, input, runState) {
   } catch (err) {
     console.error("[githubPr] worktree remove failed:", err.message);
   }
-  return { ...base, prUrl: url, branch: "true" };
+  const appUrl = role === "app" ? url : linkedUrl;
+  const autoUrl = role === "automation" ? url : linkedUrl;
+  return {
+    ...base,
+    prUrl: appUrl || url,
+    linkedPrUrl: autoUrl || base.linkedPrUrl || "",
+    branch: "true",
+  };
 }
 
 module.exports = {

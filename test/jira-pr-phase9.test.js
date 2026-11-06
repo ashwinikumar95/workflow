@@ -137,13 +137,20 @@ describe("jira-pr phase 9 templates, PRs and commit guard", () => {
     assert.equal(template.kind, "app-ticket");
     const two = buildProjectWorkflow(stubProfile({ agent: { model: "x", maxFixAttempts: 2 } }), stubLinked());
     const three = buildProjectWorkflow(stubProfile({ agent: { model: "x", maxFixAttempts: 3 } }), stubLinked());
-    const fixAgents = (graph) =>
-      graph.nodes.filter((node) => node.type === "cursorAgent" && node.config && node.config.mode === "fix");
-    const playwrights = (graph) => graph.nodes.filter((node) => node.type === "playwright");
-    assert.equal(fixAgents(two).length, 2);
-    assert.equal(playwrights(two).length, 3);
-    assert.equal(fixAgents(three).length, 3);
-    assert.equal(playwrights(three).length, 4);
+    const fixAgents = (graph, role) =>
+      graph.nodes.filter(
+        (node) =>
+          node.type === "cursorAgent" &&
+          node.config &&
+          node.config.mode === "fix" &&
+          node.config.role === role
+      );
+    const playwrights = (graph, role) =>
+      graph.nodes.filter((node) => node.type === "playwright" && node.config && node.config.role === role);
+    assert.equal(fixAgents(two, "app").length, 2);
+    assert.equal(playwrights(two, "app").length, 3);
+    assert.equal(fixAgents(three, "app").length, 3);
+    assert.equal(playwrights(three, "app").length, 4);
     assert.equal(two.runtime, "host");
     assert.equal(two.retention.keepWorktreeOnFailure, true);
     assert.equal(two.nodes.find((node) => node.type === "githubPr").config.retries, 1);
@@ -164,7 +171,8 @@ describe("jira-pr phase 9 templates, PRs and commit guard", () => {
     assert.equal(check.ok, true, check.message);
     assert.equal(graph.profileKey, "MF");
     assert.equal(graph.repository.location, profiles.MF.repo.location);
-    assert.equal(graph.nodes.find((node) => node.type === "githubPr").config.repository.repo, "Fuji-Vue3");
+    const appPr = graph.nodes.find((node) => node.type === "githubPr" && node.config && node.config.role === "app");
+    assert.equal(appPr.config.repository.repo, "Fuji-Vue3");
   });
 
   test("the guard catches each forbidden file and secret line", async () => {

@@ -20,14 +20,16 @@ function settlePayload(data, outcome, output, extra) {
     nodeId: data.nodeId,
     kind: "playwright",
     externalJobId: data.externalJobId,
-    worktreePath: data.appWorktree || data.worktreePath,
+    worktreePath: data.testedWorktree || data.appWorktree || data.worktreePath,
     testedSha: data.testedSha,
+    testedShas: data.testedShas,
     result: {
       branch: outcome.branch,
       status: outcome.status,
       failureClass: outcome.failureClass,
       reportPresent: outcome.reportPresent === true,
       testedSha: data.testedSha,
+      testedShas: data.testedShas || null,
       reason: outcome.reason || null,
       stdout: output ? redactOutput(output.stdout) : "",
       stderr: output ? redactOutput(output.stderr) : "",
@@ -62,7 +64,8 @@ async function handlePlaywrightJob(job, deps) {
   });
 
   const revParse = deps.revParse || git.revParse;
-  const head = await revParse(layout.appCwd);
+  const checkedPath = data.testedWorktree || layout.appCwd;
+  const head = await revParse(checkedPath);
   if (head !== data.testedSha) {
     await enqueueSettle(
       settlePayload(data, {

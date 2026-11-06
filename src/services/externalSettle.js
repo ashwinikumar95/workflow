@@ -53,10 +53,12 @@ async function prepareExternalSettle(data) {
   }
   if (!passed && status === "passed") status = "failed";
   if (!shaOk && reported.status === "passed") status = "failed";
+  const testedShas = data.testedShas || reported.testedShas || null;
   const entry = {
     status: passed ? "passed" : status,
     reportPresent: reported.reportPresent === true,
     testedSha: tested || reported.testedSha || null,
+    testedShas: testedShas && typeof testedShas === "object" ? testedShas : undefined,
     failureClass: passed
       ? null
       : reported.failureClass || (reported.reportPresent === true ? "tests" : "missing-report"),

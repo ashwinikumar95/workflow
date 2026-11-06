@@ -406,6 +406,12 @@ MFC starts with `enabled: false`.
 
 **Exit criteria:** each pilot produces correct PRs, and you've reviewed them by hand.
 
+### Phase 10 notes
+
+- `automation-ticket.json` generates QUT and TAC workflows: the agent edits the automation repo, the app is a detached default-branch worktree, and `app-bug` goes to `notifyAppBug` / Jira blocked / Slack `app_bug_blocked` with no further script agent.
+- App tickets create a detached automation worktree for tests. `script-bug` and `test-outdated` then open a feature-branch worktree in the linked automation repo, run gates and tests, and open a second PR. The two PR bodies link to each other.
+- Code and `test/jira-pr-phase10.test.js` cover generation, routing, separate SHAs/gates, and PR linking. Pilots are still required before this phase is ticked.
+
 ---
 
 ## Phase 11: MFC and hardening
