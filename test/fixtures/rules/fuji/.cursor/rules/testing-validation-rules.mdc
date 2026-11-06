@@ -1,0 +1,6 @@
+---
+description: Testing checklist
+globs: **/*.{vue,js}
+alwaysApply: false
+---
+Run the matching module automation tests.

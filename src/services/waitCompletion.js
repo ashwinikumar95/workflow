@@ -98,6 +98,10 @@ async function completeExternalWait({
       userId: String(approval.userId),
       decidedAt: "$$NOW",
     };
+    if (approval.planHash) setDoc.approval.planHash = String(approval.planHash);
+    if (approval.fingerprint) setDoc.approval.fingerprint = String(approval.fingerprint);
+    if (approval.expiresAt) setDoc.approval.expiresAt = String(approval.expiresAt);
+    if (approval.baseSha) setDoc.approval.baseSha = String(approval.baseSha);
   }
 
   const stages = [

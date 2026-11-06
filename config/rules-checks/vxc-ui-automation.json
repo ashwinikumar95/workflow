@@ -1,0 +1,34 @@
+{
+  "repo": "vxc-ui-automation",
+  "enabled": true,
+  "draft": true,
+  "checks": [
+    {
+      "id": "no-wait-for-timeout",
+      "rule": "test-automation-rule.mdc",
+      "severity": "high",
+      "globs": ["**/*.{ts,js}"],
+      "pattern": "waitForTimeout\\s*\\(",
+      "message": "Never use waitForTimeout()",
+      "enabled": true
+    },
+    {
+      "id": "no-test-only",
+      "rule": "test-automation-rule.mdc",
+      "severity": "high",
+      "globs": ["**/*.spec.ts"],
+      "pattern": "\\b(?:test|describe)\\.only\\s*\\(",
+      "message": "Do not leave test.only or describe.only in specs",
+      "enabled": true
+    },
+    {
+      "id": "no-page-dollar",
+      "rule": "test-automation-rule.mdc",
+      "severity": "high",
+      "globs": ["**/*.{ts,js}"],
+      "pattern": "page\\.\\$\\$\\(|page\\.\\$\\(",
+      "message": "Never use page.$() or page.$$(); use locators",
+      "enabled": true
+    }
+  ]
+}

@@ -30,6 +30,7 @@ if (isMain) {
         cwd: process.env.WORKFLOW_CWD || "/worktree",
         prompt,
         agentExecutionId: process.env.WORKFLOW_AGENT_EXECUTION_ID,
+        settingSources: ["project"],
         writeReceipt: receiptFile ? (receipt) => writeReceiptFile(receiptFile, receipt) : undefined,
       })
     )

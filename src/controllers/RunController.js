@@ -89,7 +89,9 @@ exports.decideRun = async (req, res) => {
       return res.status(403).json({ error: "Forbidden" });
     }
 
-    const outcome = await recordDecision(run._id, req.body && req.body.decision, req.user.id);
+    const outcome = await recordDecision(run._id, req.body && req.body.decision, req.user.id, {
+      planHash: req.body && req.body.planHash,
+    });
     if (outcome.http === 200) {
       return res.status(200).json(redactRunForResponse(outcome.run));
     }

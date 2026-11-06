@@ -20,7 +20,8 @@ export async function runSandbox({
     model: { id: modelId || process.env.CURSOR_MODEL || "composer-2.5" },
     local: {
       cwd,
-      settingSources: Array.isArray(settingSources) ? settingSources : [],
+      settingSources:
+        Array.isArray(settingSources) && settingSources.length ? settingSources : ["project"],
     },
   });
   try {

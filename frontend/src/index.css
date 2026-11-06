@@ -984,6 +984,21 @@ textarea {
   white-space: pre-wrap;
   margin: 0;
 }
+.plan-block,
+.rules-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.plan-block h3,
+.rules-block h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+.rules-block ul {
+  margin: 0;
+  padding-left: 1.2rem;
+}
 
 .react-flow__attribution {
   display: none;

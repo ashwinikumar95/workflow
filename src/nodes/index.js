@@ -82,6 +82,7 @@ async function executeNode(node, input, runState) {
     case "cursorPrompt":
     case "gitBranch":
     case "cursorAgent":
+    case "rulesChecks":
     case "playwright":
     case "githubPr":
       return require("./lifecycle")[node.type](node, input, runState);
@@ -99,7 +100,20 @@ async function executeNode(node, input, runState) {
             : decision === "approved"
               ? "true"
               : "false";
-        return { ...base, branch };
+        const stored = runState && runState.approval;
+        const planApproval =
+          stored && stored.planHash
+            ? {
+                decision: stored.decision,
+                planHash: stored.planHash,
+                fingerprint: stored.fingerprint,
+                expiresAt: stored.expiresAt,
+                baseSha: stored.baseSha,
+                approvedBy: stored.userId,
+                approvedAt: stored.decidedAt,
+              }
+            : base.planApproval;
+        return { ...base, branch, planApproval };
       }
       return { control: "wait", kind: "approval", output: input };
     }

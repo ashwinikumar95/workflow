@@ -753,6 +753,8 @@ async function walkClaimed(workflow, run, token, position, leaseMs) {
       external: externalState,
       resumed,
       decision: resumed && run.approval ? run.approval.decision : undefined,
+      approval: resumed ? run.approval : undefined,
+      wait: run.wait,
       completion: resumed ? run.wait.completion : undefined,
       checkpointExternal: async (external) => {
         const saved = await engine.persistRun(run._id, token, {

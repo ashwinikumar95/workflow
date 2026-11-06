@@ -1,0 +1,4 @@
+---
+alwaysApply: false
+---
+Never use waitForTimeout(). Never use page.$() or page.$$(). Prefer locators.

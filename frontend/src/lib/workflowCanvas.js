@@ -33,9 +33,9 @@ const defaultJiraUpdateConfig = () => ({
   retries: 1,
 })
 const defaultAnalysisConfig = () => ({ title: 'Analysis' })
-const defaultCursorPromptConfig = () => ({ title: 'Cursor prompt' })
+const defaultCursorPromptConfig = () => ({ title: 'Cursor prompt', mode: '' })
 const defaultGitBranchConfig = () => ({ title: 'Git branch' })
-const defaultCursorAgentConfig = () => ({ title: 'Cursor agent' })
+const defaultCursorAgentConfig = () => ({ title: 'Cursor agent', mode: '' })
 const defaultPlaywrightConfig = () => ({
   title: 'Playwright',
   strategy: '',

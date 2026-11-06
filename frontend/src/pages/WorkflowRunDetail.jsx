@@ -56,7 +56,8 @@ export default function WorkflowRunDetail() {
     setDeciding(true)
     setDecisionError('')
     try {
-      const { data } = await runApi.decide(runId, decision)
+      const planHash = typeof run?.context?.planHash === 'string' ? run.context.planHash : undefined
+      const { data } = await runApi.decide(runId, decision, planHash)
       setRun(data)
     } catch (err) {
       setDecisionError(err.response?.data?.error || err.message || 'Decision failed')
@@ -160,11 +161,64 @@ export default function WorkflowRunDetail() {
       {run.status === 'waiting' && (!run.wait?.kind || run.wait.kind === 'approval') ? (
         <section className="approval-panel">
           <h2>Waiting for approval</h2>
-          {typeof run.context?.prompt === 'string' ? (
+          {run.context?.plan ? (
+            <div className="plan-block">
+              <h3>Plan</h3>
+              {run.context.planHash ? (
+                <p className="muted small">planHash: {run.context.planHash}</p>
+              ) : null}
+              {run.context.plan.approach ? <p>{run.context.plan.approach}</p> : null}
+              {Array.isArray(run.context.plan.filesToChange) && run.context.plan.filesToChange.length ? (
+                <p className="muted small">Files: {run.context.plan.filesToChange.join(', ')}</p>
+              ) : null}
+              {Array.isArray(run.context.plan.risks) && run.context.plan.risks.length ? (
+                <p className="muted small">Risks: {run.context.plan.risks.join(', ')}</p>
+              ) : null}
+              {Array.isArray(run.context.plan.questions) && run.context.plan.questions.length ? (
+                <p className="muted small">Questions: {run.context.plan.questions.join(', ')}</p>
+              ) : null}
+            </div>
+          ) : typeof run.context?.prompt === 'string' ? (
             <pre className="code-block approval-prompt">{run.context.prompt}</pre>
           ) : (
             <p className="muted">This run is paused until you approve or reject it.</p>
           )}
+          {Array.isArray(run.context?.rulesApplied) && run.context.rulesApplied.length ? (
+            <div className="rules-block">
+              <h3>Rules applied</h3>
+              <ul>
+                {run.context.rulesApplied.map((rule, i) => {
+                  const file = typeof rule === 'string' ? rule : rule.file || rule.how || JSON.stringify(rule)
+                  const reason = typeof rule === 'object' && rule && rule.reason ? ` (${rule.reason})` : ''
+                  return <li key={i}>{file}{reason}</li>
+                })}
+              </ul>
+            </div>
+          ) : Array.isArray(run.context?.rulesManifest?.rulesApplied) && run.context.rulesManifest.rulesApplied.length ? (
+            <div className="rules-block">
+              <h3>Rules applied</h3>
+              <ul>
+                {run.context.rulesManifest.rulesApplied.map((rule, i) => (
+                  <li key={i}>
+                    {rule.file}
+                    {rule.reason ? ` (${rule.reason})` : ''}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {Array.isArray(run.context?.review?.uncertainties) && run.context.review.uncertainties.length ? (
+            <div className="rules-block">
+              <h3>Review uncertainties</h3>
+              <ul>
+                {run.context.review.uncertainties.map((item, i) => (
+                  <li key={i}>
+                    {item.rule}: {item.question}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           <div className="approval-actions">
             <button type="button" className="btn btn-primary" disabled={deciding} onClick={() => decide('approved')}>
               Approve

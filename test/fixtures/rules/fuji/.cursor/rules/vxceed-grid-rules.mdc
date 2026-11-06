@@ -1,0 +1,6 @@
+---
+description: vxceedGrid standards
+globs: "**/*.{vue,js,ts}"
+alwaysApply: false
+---
+Use vxceedGrid. Do not migrate toward Syncfusion ejs-grid.

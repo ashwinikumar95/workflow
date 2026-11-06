@@ -262,6 +262,10 @@ async function startAgentHost(_spec, data) {
   const receiptFile =
     receiptPathForWorktree(worktree) ||
     (runId ? agentReceiptPath(config.worktreesDir || path.dirname(worktree), runId) : "");
+  const artifactDir =
+    data.artifactDir ||
+    (runId ? path.join(config.worktreesDir || path.dirname(worktree), String(runId)) : "");
+  if (artifactDir) await fs.promises.mkdir(artifactDir, { recursive: true });
   const entry = data.entry || AGENT_ENTRY;
   const result = await hostProcess.run({
     command: "node",
@@ -271,6 +275,10 @@ async function startAgentHost(_spec, data) {
       WORKFLOW_CWD: worktree,
       WORKFLOW_PROMPT_PATH: promptFile,
       WORKFLOW_RECEIPT_PATH: receiptFile,
+      WORKFLOW_ARTIFACT_DIR: artifactDir,
+      WORKFLOW_PLAN_PATH: artifactDir ? path.join(artifactDir, "plan.json") : "",
+      WORKFLOW_RESULT_PATH: artifactDir ? path.join(artifactDir, "result.json") : "",
+      WORKFLOW_REVIEW_PATH: artifactDir ? path.join(artifactDir, "review.json") : "",
       WORKFLOW_AGENT_EXECUTION_ID: data.agentExecutionId || "",
       CURSOR_API_KEY: config.cursorApiKey || "",
       CURSOR_MODEL: data.model || config.cursorModel || "composer-2.5",

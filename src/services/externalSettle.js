@@ -30,7 +30,8 @@ async function prepareExternalSettle(data) {
     } catch {
       return withBranch(data, "false");
     }
-    const decision = classifyAgentTree(observed);
+    const mode = data.mode || (data.result && data.result.mode);
+    const decision = classifyAgentTree(observed, mode);
     const branch = decision.branch === "true" ? "true" : "false";
     return withBranch(data, branch, { sha: decision.sha || observed.head, status: observed.sdkStatus });
   }

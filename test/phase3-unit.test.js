@@ -463,7 +463,7 @@ describe("phase 3 unit", () => {
     assert.equal(result.status, "finished");
     assert.equal(seen.length, 1);
     assert.equal(seen[0].local.cwd, "/worktree");
-    assert.deepEqual(seen[0].local.settingSources, []);
+    assert.deepEqual(seen[0].local.settingSources, ["project"]);
     assert.equal(seen[0].cloud, undefined);
     assert.equal(Agent.prompt, undefined);
   });

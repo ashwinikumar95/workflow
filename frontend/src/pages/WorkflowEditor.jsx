@@ -1306,6 +1306,22 @@ export default function WorkflowEditor() {
                   disabled={!canEditGraph}
                 />
               </label>
+              {nodeKind === 'cursorAgent' || nodeKind === 'cursorPrompt' ? (
+                <label className="field">
+                  <span>Mode</span>
+                  <select
+                    value={selectedNode.data?.config?.mode || ''}
+                    onChange={(e) => updateSelectedNodeConfig({ mode: e.target.value })}
+                    disabled={!canEditGraph}
+                  >
+                    <option value="">Default</option>
+                    <option value="plan">Plan</option>
+                    <option value="implement">Implement</option>
+                    <option value="fix">Fix</option>
+                    <option value="review">Review</option>
+                  </select>
+                </label>
+              ) : null}
             </div>
           ) : selectedNode && nodeKind === 'playwright' ? (
             <div className="form-stack tight">

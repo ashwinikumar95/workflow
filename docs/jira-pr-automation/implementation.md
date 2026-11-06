@@ -484,7 +484,7 @@ Write each one down as it's settled, mostly in Phase 0.
 - [x] Phase 4: locks, states, recovery, cancel and retry
 - [x] Phase 5: Jira intake
 - [x] Phase 6: Slack events
-- [ ] Phase 7: rules, plan mode, approval
+- [x] Phase 7: rules, plan mode, approval
 - [ ] Phase 8: test selection, reports, failure handling
 - [ ] Phase 9: templates, PRs, MF pilot
 - [ ] Phase 10: automation tickets, linked PRs, QUT and TAC pilots
