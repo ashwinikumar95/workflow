@@ -4,6 +4,7 @@ const queue = require("../services/queue");
 const { handlePlaywrightJob } = require("../services/playwrightAttempt");
 const { getPlaywrightQueue } = require("../services/queue");
 const { assertPinnedImage } = require("../services/containerSpec");
+const { installHost, browsersHost, runSuiteHost, runBaselineHost } = require("../services/hostRunners");
 
 async function enqueueSettle(payload) {
   await queue.add("settle-wait", payload, {
@@ -37,6 +38,18 @@ function startPlaywrightWorker() {
   const worker = new Worker(
     "playwright-queue",
     async (job) => {
+      const runtime = job.data && job.data.runtime;
+      if (runtime === "host") {
+        const data = { ...(job.data || {}) };
+        await handlePlaywrightJob({ ...job, data }, {
+          enqueueSettle,
+          install: (opts) => installHost({ ...opts, data }),
+          browsers: (opts) => browsersHost({ ...opts, data }),
+          runSuite: (opts) => runSuiteHost({ ...opts, data }),
+          runBaseline: (opts) => runBaselineHost({ ...opts, data }),
+        });
+        return;
+      }
       const image = (job.data && job.data.image) || config.playwrightImage;
       if (!image) {
         await bootstrap(job, "image-unpinned");

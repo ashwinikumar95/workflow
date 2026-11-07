@@ -8,11 +8,13 @@ const { validateWorkflowGraph } = require("../src/utils/workflowGraph");
 const { executeNode } = require("../src/nodes");
 const {
   getNextNode,
+  carryForward,
   buildExecutionClaimRenewEveryMs,
 } = require("../src/services/executionengine");
 const {
   buildWorkflowWorkerOptions,
   handleWorkflowJob,
+  isFinalAttempt,
 } = require("../src/workers/worker");
 const engine = require("../src/services/executionengine");
 
@@ -124,6 +126,36 @@ describe("phase 1 config, graph, nodes, and worker options", () => {
     } finally {
       config.slackWebhookUrl = previousSlack;
     }
+  });
+
+  test("carryForward keeps ticket fields when a condition returns boolean false", () => {
+    const previous = { issueKey: "MFC-10142", jira: { key: "MFC-10142" }, branch: "false" };
+    const next = carryForward(previous, false);
+    assert.equal(next.issueKey, "MFC-10142");
+    assert.equal(next.jira.key, "MFC-10142");
+    assert.equal(next.branch, "false");
+    const objectOut = carryForward(previous, { issueKey: "MF-1", branch: "true" });
+    assert.equal(objectOut.issueKey, "MF-1");
+  });
+
+  test("preview keeps ticket, branch, and reason instead of truncated jira JSON", () => {
+    const text = engine.preview({
+      issueKey: "MFC-10142",
+      jira: {
+        key: "MFC-10142",
+        summary: "Options & Params - Migrate Central Vue3 codebase from Options API to Composition API",
+        descriptionText: "D".repeat(4000),
+      },
+      branch: "false",
+      reason: "plan-dirty",
+    });
+    const parsed = JSON.parse(text);
+    assert.equal(parsed.issueKey, "MFC-10142");
+    assert.equal(parsed.branch, "false");
+    assert.equal(parsed.reason, "plan-dirty");
+    assert.match(parsed.summary, /Options/);
+    assert.equal(Object.prototype.hasOwnProperty.call(parsed, "jira"), false);
+    assert.ok(text.length <= 200);
   });
 
   test("getNextNode keeps boolean edges and requires branch on objects", () => {
@@ -239,5 +271,12 @@ describe("phase 1 config, graph, nodes, and worker options", () => {
     } finally {
       engine.executeWorkflow = original;
     }
+  });
+
+  test("isFinalAttempt is true only on the last BullMQ attempt", () => {
+    assert.equal(isFinalAttempt({ opts: { attempts: 3 }, attemptsMade: 1 }), false);
+    assert.equal(isFinalAttempt({ opts: { attempts: 3 }, attemptsMade: 2 }), false);
+    assert.equal(isFinalAttempt({ opts: { attempts: 3 }, attemptsMade: 3 }), true);
+    assert.equal(isFinalAttempt({ attemptsMade: 1 }), true);
   });
 });

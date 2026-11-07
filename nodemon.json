@@ -1,0 +1,16 @@
+{
+  "watch": ["app.js", "src"],
+  "ext": "js,mjs,cjs,json",
+  "ignore": [
+    "tmp-*.js",
+    "tmp-*.mjs",
+    "tmp-*.cjs",
+    "*.tmp.js",
+    "test/**",
+    "frontend/**",
+    "graphify-out/**",
+    "node_modules/**",
+    ".git/**"
+  ],
+  "delay": 500
+}

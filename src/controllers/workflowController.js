@@ -246,6 +246,19 @@ exports.startWorkflow = async (req, res) => {
         ? req.body
         : {};
 
+    const intake = workflow.trigger && workflow.trigger.config && workflow.trigger.config.intake;
+    if (intake === "bucket") {
+      const profileKey =
+        workflow.profileKey ||
+        (Array.isArray(workflow.trigger.config.profileKeys) ? workflow.trigger.config.profileKeys[0] : "");
+      if (!profileKey) {
+        return res.status(400).json({ error: "Bucket workflow is missing a profile key" });
+      }
+      const { pollOneProfile } = require("../services/jiraDispatcher");
+      const report = await pollOneProfile(profileKey, { dryRun: false });
+      return res.status(202).json({ message: "Bucket poll started", profileKey, report });
+    }
+
     const { enqueueWorkflowJob } = require("../services/enqueueWorkflowJob");
     const job = await enqueueWorkflowJob(workflow._id, input);
     res.status(202).json({ message: "Workflow queued", jobId: job.id });

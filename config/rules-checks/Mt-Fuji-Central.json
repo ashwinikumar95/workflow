@@ -1,0 +1,99 @@
+{
+  "repo": "Mt-Fuji-Central",
+  "enabled": true,
+  "draft": true,
+  "checks": [
+    {
+      "id": "no-syncfusion-import",
+      "rule": "native-components-rules.mdc",
+      "severity": "high",
+      "globs": ["**/*.{vue,js,ts}"],
+      "pattern": "from\\s+['\"]@syncfusion/",
+      "message": "Do not import @syncfusion packages",
+      "enabled": true
+    },
+    {
+      "id": "no-ejs-tags",
+      "rule": "native-components-rules.mdc",
+      "severity": "high",
+      "globs": ["**/*.{vue,js}"],
+      "pattern": "<ejs-[A-Za-z0-9-]+",
+      "message": "Do not introduce Syncfusion ejs-* tags",
+      "enabled": true
+    },
+    {
+      "id": "no-v-html",
+      "rule": "security-rules.mdc",
+      "severity": "high",
+      "globs": ["**/*.{vue,js}"],
+      "pattern": "\\bv-html\\b",
+      "message": "Do not use v-html without an explicit security-rule exception",
+      "enabled": true
+    },
+    {
+      "id": "no-console-log",
+      "rule": "performance-optimization-rules.mdc",
+      "severity": "medium",
+      "globs": ["src/**"],
+      "pattern": "console\\.log\\s*\\(",
+      "message": "Remove console.log from src",
+      "enabled": true
+    },
+    {
+      "id": "no-localstorage-auth-token",
+      "rule": "security-rules.mdc",
+      "severity": "high",
+      "globs": ["**/*.{vue,js,ts}"],
+      "pattern": "localStorage\\.setItem\\(\\s*['\"][^'\"]*(token|password|secret|sessionid|access_token|refresh_token)",
+      "flags": "i",
+      "message": "Do not store auth tokens, passwords, or session ids in localStorage. The gateway access token belongs in memory and sessionStorage key lhu.central.access_token only.",
+      "enabled": true
+    },
+    {
+      "id": "no-extra-sessionstorage-auth-token",
+      "rule": "DOWNSTREAM_MIGRATION_FRONTEND_SKILL.md",
+      "severity": "high",
+      "globs": ["**/*.{vue,js,ts}"],
+      "pattern": "sessionStorage\\.setItem\\(\\s*['\"](?!lhu\\.central\\.access_token['\"])[^'\"]*(token|password|secret|sessionid|access_token|refresh_token)",
+      "flags": "i",
+      "message": "Do not add sessionStorage auth keys other than lhu.central.access_token",
+      "enabled": true
+    },
+    {
+      "id": "no-src-lib",
+      "rule": "DOWNSTREAM_MIGRATION_FRONTEND_SKILL.md",
+      "severity": "high",
+      "globs": ["src/lib/**"],
+      "pattern": ".",
+      "message": "Do not add src/lib/. Central helpers live in src/utils/.",
+      "enabled": true
+    },
+    {
+      "id": "no-src-composables",
+      "rule": "COMPOSITION_API_EXPLAINED.md",
+      "severity": "high",
+      "globs": ["src/composables/**"],
+      "pattern": ".",
+      "message": "Do not add src/composables/. Keep Options API and put shared helpers in src/utils/.",
+      "enabled": true
+    },
+    {
+      "id": "no-vite-env-config",
+      "rule": "DEVELOPER_PROMPT.md",
+      "severity": "high",
+      "globs": ["src/**", "vite-app-config.mjs", ".env.example"],
+      "pattern": "import\\.meta\\.env\\.VITE_|\\bVITE_(GATEWAY_URL|USE_GLOBAL_AUTH|APP_CODE|APP_DOMAIN|GLOBAL_LOGIN_URL)\\b",
+      "message": "Do not use import.meta.env.VITE_* or VITE_ gateway keys. Central config is unprefixed via src/config/index.js.",
+      "enabled": true
+    },
+    {
+      "id": "no-dist-edits",
+      "rule": "central-project-rules.mdc",
+      "severity": "high",
+      "globs": ["dist/**"],
+      "pattern": ".",
+      "message": "Do not edit files under dist/",
+      "enabled": true
+    }
+  ]
+}

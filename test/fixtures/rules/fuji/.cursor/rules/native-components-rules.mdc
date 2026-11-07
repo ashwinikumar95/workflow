@@ -1,0 +1,5 @@
+---
+description: Native/vxceed UI component standards
+alwaysApply: true
+---
+Never import `@syncfusion/*`. Never introduce `<ejs-*>` tags.

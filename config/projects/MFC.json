@@ -1,0 +1,59 @@
+{
+  "jiraKey": "MFC",
+  "kind": "app",
+  "linkedProfile": "TAC",
+  "enabled": true,
+  "eligibleJql": "project = MFC AND assignee = currentUser() AND status in (\"To Do\",\"Open\",\"Reopened\",\"Ready for Assign\")",
+  "transitions": {
+    "claim": "In Progress",
+    "review": "READY FOR REVIEW",
+    "blocked": "On Hold"
+  },
+  "repo": {
+    "location": "D:/Projects/MT-Fuji_Central_Master/FE/Mt-Fuji-Central",
+    "defaultBranch": "main",
+    "github": { "owner": "Vxceed-IN", "repo": "Mt-Fuji-Central" },
+    "credentialRef": "GITHUB_TOKEN",
+    "credentialFiles": [".env"],
+    "installCommand": ["npm", "ci"],
+    "appCommand": ["npx", "vite", "--port", "5181", "--strictPort"],
+    "readiness": "/",
+    "testCommand": [],
+    "moduleRoot": "",
+    "gates": [["npm", "run", "lint"], ["npm", "run", "build"]]
+  },
+  "rules": {
+    "forceInclude": [
+      ".cursor/rules/DEVELOPER_PROMPT.md",
+      ".cursor/rules/COMPOSITION_API_EXPLAINED.md"
+    ],
+    "extraDocs": [],
+    "topicIncludes": [
+      {
+        "id": "downstream-identity",
+        "when": [
+          "downstream migration",
+          "global identity",
+          "global auth",
+          "global-auth",
+          "use_global_auth",
+          "gateway login",
+          "gateway auth",
+          "lhu.central"
+        ],
+        "files": [
+          ".cursor/rules/DOWNSTREAM_MIGRATION_FRONTEND_SKILL.md",
+          ".cursor/rules/DOWNSTREAM_MIGRATION_REVIEW_SKILL.md"
+        ]
+      }
+    ]
+  },
+  "moduleMap": {
+    "rules": [],
+    "autoKebabFromViews": true,
+    "sharedPaths": ["src/router/**", "src/stores/**", "src/components/globalComponents/**", "package.json"],
+    "sharedFallback": ["-g", "@sanity"]
+  },
+  "agent": { "model": "composer-2.5", "maxFixAttempts": 2 },
+  "approvalExpiryHours": 24
+}

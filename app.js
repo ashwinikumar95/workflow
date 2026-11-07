@@ -8,6 +8,7 @@ const triggerRoutes = require("./src/routes/triggerRoutes");
 const userRoutes = require("./src/routes/userRoutes");
 const authRoutes = require("./src/routes/authRoutes");
 const runRoutes = require("./src/routes/runRoutes");
+const jiraRoutes = require("./src/routes/jiraRoutes");
 
 require("./src/services/queue");
 if (config.workflowWorkerEnabled) {
@@ -27,13 +28,20 @@ app.use("/workflow", workflowRoutes);
 app.use("/", triggerRoutes);
 app.use("/user", userRoutes);
 app.use("/runs", runRoutes);
+app.use("/jira", jiraRoutes);
 app.get("/", (req, res) => {
   res.send("Workflow Builder API Running");
 });
 
 mongoose
   .connect(config.mongodbUri)
-  .then(() => {
+  .then(async () => {
+    try {
+      const { seedDraftWorkflows } = require("./src/services/workflowSeed");
+      await seedDraftWorkflows();
+    } catch (err) {
+      console.error("[workflow-seed] failed:", err && err.message ? err.message : err);
+    }
     app.listen(config.port, () => {
       console.log(`Server listening on http://localhost:${config.port}`);
     });

@@ -1,0 +1,47 @@
+---
+alwaysApply: true
+---
+# Mt-Fuji-Central project rules
+
+This is the Vue 3 Central frontend (`mt-fuji-central3-0`): outlets, distributors, trade promotions, targets, routes, and related master data. It is not the DMS (Fuji-Vue3) app. Follow patterns already in this repo.
+
+## Stack
+
+- Vue 3 **Options API** (`data`, `methods`, `computed`, `watch`, lifecycle hooks). Do not introduce Composition API (`setup`, `ref`, `reactive`) unless the ticket explicitly asks for it.
+- Vite, Pinia, Vue Router, vue-i18n (`$t()` for user-facing text).
+- Screens typically wrap content in `main-layout`.
+
+## Components
+
+Use native `vxceed*` / `Native*` components under `src/components/globalComponents/`. Syncfusion `@syncfusion/*` is not a dependency. Do not add it.
+
+| Need | Use |
+|------|-----|
+| List / master grid | `vxceedGrid` + `vxceedColumnChooser` (or `vxceedListMasterGrid` where the screen already does) |
+| Tabs | `vxceedTabs` |
+| Autocomplete | `vxceedAutoComplete` |
+| Dropdown | `vxceedDropDownList` |
+| Multi-select | `vxceedMultiSelect` |
+| Date | `NativeDatePicker` |
+| Date range | `NativeDateRangePicker` |
+| Signature | `NativeSignature` |
+| Upload | `vxceedUploader` |
+| Chart | `vxceedColumnChart` |
+| Tree | `TreeView` / `TreeNode` |
+
+This repo has **no** `vxceed-form-grid`. Do not copy that component from Fuji-Vue3.
+
+CSS classes such as `mfc-ejs-tab` and `mfc-ejs-grid` are styling/automation compatibility names. They are not Syncfusion tags. Do not treat them as a reason to import `@syncfusion/*` or add `<ejs-*>` elements.
+
+## Structure
+
+- Views live in `src/views/`. Feature UI lives in `src/components/<Feature>/`.
+- Use existing service methods in `src/service/`. Do not invent parallel API clients.
+- Keep component-level state in `data()`. Use Pinia only for shared app state.
+- Do not edit generated output under `dist/`.
+
+## Quality
+
+- `const` / `let`, async/await, optional chaining. No `var`.
+- Handle loading and error states the way sibling screens do.
+- Never hardcode secrets, tokens, or `.env` values.

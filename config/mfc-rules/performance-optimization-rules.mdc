@@ -1,0 +1,15 @@
+---
+description: Performance optimization standards for Mt-Fuji-Central
+globs: **/*.{vue,js}
+alwaysApply: false
+---
+
+# Performance Optimization Rules
+
+- Remove unused variables, imports, and components.
+- Remove `console.log`, `debugger`, and commented-out code from `src/`.
+- Do not add duplicate API calls. Debounce search/filter requests.
+- Use computed properties for derived data. Avoid expensive work in templates.
+- Use `v-if` for heavy conditional UI and `v-show` for frequent toggles.
+- Keep grid paging on. Do not load unbounded row sets into `vxceedGrid`.
+- Remove event listeners, timers, and subscriptions on destroy.

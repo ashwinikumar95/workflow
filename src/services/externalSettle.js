@@ -1,15 +1,28 @@
 const Run = require("../models/Run");
 const git = require("./gitService");
-const { classifyAgentTree } = require("./agentAttempt");
+const { classifyAgentTree, defaultInspect } = require("./agentAttempt");
 
 function withBranch(data, branch, extra) {
   const result = { ...(data.result || {}), ...(extra || {}), branch };
   return { ...data, result };
 }
 
+function agentJobAlreadyDecided(data) {
+  const result = data && data.result && typeof data.result === "object" ? data.result : {};
+  return result.branch === "true" || result.branch === "false";
+}
+
+function notReadyError() {
+  const err = new Error("agent settle is not ready");
+  err.retryable = true;
+  return err;
+}
+
 /**
  * Re-check agent and Playwright evidence on the workflow worker.
  * The container exit code and `result.status === "finished"` are not authority.
+ * A branch already set by the agent job is a terminal decision: do not throw
+ * `start` and leave the run waiting forever.
  */
 async function prepareExternalSettle(data) {
   if (!data || data.kind === "approval" || (data.kind !== "agent" && data.kind !== "playwright")) {
@@ -24,26 +37,36 @@ async function prepareExternalSettle(data) {
     if (!worktree || !preAgentSha) return withBranch(data, "false");
     let observed;
     try {
-      const head = await git.revParse(worktree);
-      const clean = await git.isClean(worktree);
-      const descendant = await git.isAncestor(preAgentSha, head, worktree);
-      const diffEmpty = await git.diffIsEmpty(preAgentSha, head, worktree);
-      observed = {
-        clean,
-        head,
-        preAgentSha,
-        descendant,
-        diffEmpty,
-        hasReceipt: false,
-        containerRunning: false,
-        sdkStatus: data.result && data.result.status,
-      };
+      observed = await defaultInspect(worktree, preAgentSha, {
+        runId: data.runId,
+        nodeId: data.nodeId,
+      });
+      observed.containerRunning = false;
+      observed.sdkStatus = data.result && data.result.status ? data.result.status : null;
     } catch {
       return withBranch(data, "false");
     }
-    const decision = classifyAgentTree(observed);
+    const mode = data.mode || (data.result && data.result.mode);
+    const decision = classifyAgentTree(observed, mode);
+    const decided = agentJobAlreadyDecided(data);
+    if (decision.action === "wait" && !decided) {
+      throw notReadyError();
+    }
+    if (decision.action === "start") {
+      if (!decided) throw notReadyError();
+      const result = data.result || {};
+      return withBranch(data, "false", {
+        sha: observed.head,
+        status: result.status || observed.sdkStatus,
+        reason: result.reason || "no-commit",
+      });
+    }
     const branch = decision.branch === "true" ? "true" : "false";
-    return withBranch(data, branch, { sha: decision.sha || observed.head, status: observed.sdkStatus });
+    return withBranch(data, branch, {
+      sha: decision.sha || observed.head,
+      status: observed.sdkStatus,
+      reason: decision.reason,
+    });
   }
 
   const worktree = data.worktreePath || external.worktreePath;
@@ -63,10 +86,12 @@ async function prepareExternalSettle(data) {
   }
   if (!passed && status === "passed") status = "failed";
   if (!shaOk && reported.status === "passed") status = "failed";
+  const testedShas = data.testedShas || reported.testedShas || null;
   const entry = {
     status: passed ? "passed" : status,
     reportPresent: reported.reportPresent === true,
     testedSha: tested || reported.testedSha || null,
+    testedShas: testedShas && typeof testedShas === "object" ? testedShas : undefined,
     failureClass: passed
       ? null
       : reported.failureClass || (reported.reportPresent === true ? "tests" : "missing-report"),

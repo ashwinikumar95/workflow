@@ -1,0 +1,6 @@
+---
+description: Testing checklist
+globs: **/*.{vue,js}
+alwaysApply: false
+---
+Keep Central selectors compatible with TAC automation.

@@ -18,6 +18,7 @@ export default defineConfig({
       '/user': { target: 'http://localhost:3000', changeOrigin: true },
       '/webhook': { target: 'http://localhost:3000', changeOrigin: true },
       '/runs': { target: 'http://localhost:3000', changeOrigin: true },
+      '/jira': { target: 'http://localhost:3000', changeOrigin: true },
     },
   },
 })

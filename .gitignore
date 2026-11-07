@@ -17,6 +17,12 @@ yarn-error.log*
 .DS_Store
 Thumbs.db
 
+# Local scratch / dump scripts (do not let nodemon watch these)
+tmp-*.js
+tmp-*.mjs
+tmp-*.cjs
+*.tmp.js
+
 # IDE / editor
 .idea/
 .vscode/
@@ -29,3 +35,6 @@ coverage/
 
 # Optional: local MongoDB data if you ever run it from the repo
 # data/
+
+# Graphify knowledge graph (generated locally)
+graphify-out/

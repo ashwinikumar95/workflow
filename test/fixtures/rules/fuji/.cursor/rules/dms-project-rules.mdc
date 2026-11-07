@@ -1,0 +1,5 @@
+---
+alwaysApply: true
+---
+# DMS Project Foundation Rules
+Use Vue 3 Options API. Do not edit generated `dist/` output.

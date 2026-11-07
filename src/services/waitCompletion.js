@@ -98,6 +98,10 @@ async function completeExternalWait({
       userId: String(approval.userId),
       decidedAt: "$$NOW",
     };
+    if (approval.planHash) setDoc.approval.planHash = String(approval.planHash);
+    if (approval.fingerprint) setDoc.approval.fingerprint = String(approval.fingerprint);
+    if (approval.expiresAt) setDoc.approval.expiresAt = String(approval.expiresAt);
+    if (approval.baseSha) setDoc.approval.baseSha = String(approval.baseSha);
   }
 
   const stages = [
@@ -142,6 +146,19 @@ function samePendingWait(run, args) {
   );
 }
 
+function slackForPlaywrightSettle(args) {
+  const result = args && args.result && typeof args.result === "object" ? args.result : {};
+  if (args && args.kind !== "playwright") return null;
+  if (result.branch === "true") return null;
+  const failureClass = result.failureClass || (args.playwrightByNode && args.playwrightByNode.entry && args.playwrightByNode.entry.failureClass);
+  const type = failureClass === "env" ? "env_failed" : "playwright_failed";
+  return {
+    type,
+    reason: result.reason || failureClass || "playwright failed",
+    stage: "playwright",
+  };
+}
+
 /**
  * Atomic completion, then one resume enqueue.
  * A repeated call does not change `wait.completion`. When `enqueuedAt` is still
@@ -150,6 +167,14 @@ function samePendingWait(run, args) {
 async function settleWait(args, options = {}) {
   const updated = await completeExternalWait(args);
   if (updated) {
+    const slackEvent = slackForPlaywrightSettle(args);
+    if (slackEvent) {
+      const slack = require("./slackService");
+      await slack.emit(updated._id, slackEvent.type, {
+        reason: slackEvent.reason,
+        stage: slackEvent.stage,
+      });
+    }
     try {
       await enqueueResumeJob(updated);
       const stamped = await Run.findById(updated._id);
@@ -203,6 +228,53 @@ async function enqueuePendingResumes() {
   }
 }
 
+/**
+ * Last-resort: settle-wait exhausted while the run is still parked.
+ * Marks the run failed so Retry works instead of leaving it waiting forever.
+ */
+async function failWaitingExternal({ runId, kind, nodeId, externalJobId, error }) {
+  if (!runId || (kind !== "agent" && kind !== "playwright")) {
+    return { matched: false, run: null };
+  }
+  const message = error && error.message ? String(error.message) : "external wait failed";
+  const updated = await Run.findOneAndUpdate(
+    {
+      _id: runId,
+      status: "waiting",
+      "wait.state": "pending",
+      "wait.kind": kind,
+      "wait.nodeId": nodeId,
+      "wait.externalJobId": externalJobId,
+    },
+    {
+      $set: {
+        status: "failed",
+        endedAt: new Date(),
+        executionClaim: null,
+        executionClaimExpiresAt: null,
+      },
+      $push: {
+        logs: {
+          nodeId: nodeId || undefined,
+          status: "failed",
+          error: message,
+        },
+      },
+    },
+    { returnDocument: "after" }
+  );
+  if (!updated) {
+    return { matched: false, run: runId ? await Run.findById(runId) : null };
+  }
+  const ticketState = require("./ticketState");
+  const recovery = require("./recovery");
+  const TicketRun = require("../models/TicketRun");
+  const ticket = await TicketRun.findOne({ runId: String(updated._id) });
+  await recovery.killRunProcesses(updated, ticket);
+  await ticketState.markEnded(updated._id, "failed", { failureReason: message });
+  return { matched: true, run: updated };
+}
+
 async function enqueuePendingExternalJobs() {
   const rows = await Run.find({
     status: "waiting",
@@ -241,6 +313,7 @@ async function enqueuePendingExternalJobs() {
 module.exports = {
   completeExternalWait,
   settleWait,
+  failWaitingExternal,
   enqueuePendingResumes,
   enqueuePendingExternalJobs,
   setResumeEnqueue,

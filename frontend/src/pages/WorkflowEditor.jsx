@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   ReactFlow,
   Background,
@@ -18,15 +18,18 @@ import DelayNode from '../components/nodes/DelayNode'
 import NotifyNode from '../components/nodes/NotifyNode'
 import ApprovalNode from '../components/nodes/ApprovalNode'
 import JiraNode from '../components/nodes/JiraNode'
+import JiraUpdateNode from '../components/nodes/JiraUpdateNode'
 import AnalysisNode from '../components/nodes/AnalysisNode'
 import CursorPromptNode from '../components/nodes/CursorPromptNode'
 import GitBranchNode from '../components/nodes/GitBranchNode'
 import CursorAgentNode from '../components/nodes/CursorAgentNode'
+import RulesChecksNode from '../components/nodes/RulesChecksNode'
+import TestSelectNode from '../components/nodes/TestSelectNode'
 import PlaywrightNode from '../components/nodes/PlaywrightNode'
 import GithubPrNode from '../components/nodes/GithubPrNode'
 import KeyValueRows from '../components/KeyValueRows'
 import UxSection from '../components/UxSection'
-import { webhookUrl, workflowApi } from '../lib/api'
+import { jiraApi, webhookUrl, workflowApi } from '../lib/api'
 import {
   bodyObjectToRows,
   headersObjectToRows,
@@ -55,15 +58,29 @@ const nodeTypes = {
   notify: NotifyNode,
   approval: ApprovalNode,
   jira: JiraNode,
+  jiraUpdate: JiraUpdateNode,
   analysis: AnalysisNode,
   cursorPrompt: CursorPromptNode,
   gitBranch: GitBranchNode,
   cursorAgent: CursorAgentNode,
+  rulesChecks: RulesChecksNode,
+  testSelect: TestSelectNode,
   playwright: PlaywrightNode,
   githubPr: GithubPrNode,
 }
 
-const branchNodeTypes = new Set(['approval', 'cursorAgent', 'playwright'])
+const branchNodeTypes = new Set(['approval', 'cursorAgent', 'playwright', 'condition', 'rulesChecks'])
+
+function identityFromTrigger(trigger) {
+  const config = trigger && trigger.config && typeof trigger.config === 'object' ? trigger.config : {}
+  const identity = {}
+  if (typeof config.seedKey === 'string' && config.seedKey) identity.seedKey = config.seedKey
+  if (typeof config.intake === 'string' && config.intake) identity.intake = config.intake
+  if (Array.isArray(config.profileKeys) && config.profileKeys.length) {
+    identity.profileKeys = config.profileKeys.filter((key) => typeof key === 'string' && key)
+  }
+  return identity
+}
 
 function parseBodyJson(text) {
   const t = text.trim()
@@ -77,6 +94,7 @@ function parseBodyJson(text) {
 
 export default function WorkflowEditor() {
   const { id } = useParams()
+  const navigate = useNavigate()
   const [name, setName] = useState('Workflow')
   const [status, setStatus] = useState('draft')
   const [triggerType, setTriggerType] = useState('webhook')
@@ -88,6 +106,7 @@ export default function WorkflowEditor() {
   const [cronAdvancedExpr, setCronAdvancedExpr] = useState('')
   const [triggersEnabled, setTriggersEnabled] = useState(true)
   const [webhookProvider, setWebhookProvider] = useState('generic')
+  const [triggerIdentity, setTriggerIdentity] = useState({})
   const [repoLocation, setRepoLocation] = useState('')
   const [repoBranch, setRepoBranch] = useState('main')
   const [repoCredentialRef, setRepoCredentialRef] = useState('GITHUB_TOKEN')
@@ -99,6 +118,7 @@ export default function WorkflowEditor() {
   const [saving, setSaving] = useState(false)
   const [publishing, setPublishing] = useState(false)
   const [starting, setStarting] = useState(false)
+  const [jiraIssue, setJiraIssue] = useState('')
   const [togglingPause, setTogglingPause] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
@@ -117,6 +137,7 @@ export default function WorkflowEditor() {
     const { data } = await workflowApi.get(id)
     setName(data.name || 'Workflow')
     setStatus(data.status || 'draft')
+    setTriggerIdentity(identityFromTrigger(data.trigger))
     const tt = data.trigger?.type
     if (tt === 'cron') {
       setTriggerType('cron')
@@ -253,10 +274,13 @@ export default function WorkflowEditor() {
         notify: 'Notify',
         approval: 'Approval',
         jira: 'Jira',
+        jiraUpdate: 'Jira update',
         analysis: 'Analysis',
         cursorPrompt: 'Cursor prompt',
         gitBranch: 'Git branch',
         cursorAgent: 'Cursor agent',
+        rulesChecks: 'Rules checks',
+        testSelect: 'Test select',
         playwright: 'Playwright',
         githubPr: 'Pull request',
       }
@@ -337,8 +361,9 @@ export default function WorkflowEditor() {
   }
 
   function buildTriggerPayload() {
+    const identity = triggerIdentity && typeof triggerIdentity === 'object' ? triggerIdentity : {}
     if (triggerType === 'webhook') {
-      const config = {}
+      const config = { ...identity }
       if (webhookProvider === 'jira') config.provider = 'jira'
       if (webhookSecret.trim()) config.secret = webhookSecret.trim()
       else if (webhookSecretSet) config.secretSet = true
@@ -350,7 +375,7 @@ export default function WorkflowEditor() {
     return {
       type: 'cron',
       enabled: triggersEnabled,
-      config: { cron },
+      config: { ...identity, cron },
     }
   }
 
@@ -395,16 +420,36 @@ export default function WorkflowEditor() {
     }
   }
 
+  function openRun(runId) {
+    if (!runId) return false
+    navigate(`/workflows/${id}/runs/${runId}`)
+    return true
+  }
+
   async function handleRunNow() {
     setStarting(true)
     setError('')
     setMessage('')
     try {
-      const { data } = await workflowApi.start(id, {})
-      setMessage(`Queued — jobId: ${data.jobId}`)
+      const issue = jiraIssue.trim()
+      if (issue) {
+        const { data } = await jiraApi.run(issue)
+        if (openRun(data.runId)) return
+        setMessage(`Queued — ${data.jiraKey} run ${data.runId}`)
+      } else {
+        const { data } = await workflowApi.start(id, {})
+        setMessage(`Queued — jobId: ${data.jobId}`)
+      }
       setTimeout(() => setMessage(''), 4000)
     } catch (err) {
-      setError(err.response?.data?.error || err.message || 'Start failed')
+      const data = err.response?.data
+      if (err.response?.status === 409 && data?.runId) {
+        setError(
+          `${data.error || 'A live run already exists for this ticket'}. Open the current run from Runs, or cancel it first.`
+        )
+        return
+      }
+      setError(data?.error || err.message || 'Start failed')
     } finally {
       setStarting(false)
     }
@@ -849,6 +894,10 @@ export default function WorkflowEditor() {
               <span className="ux-node-card-title">Jira issue</span>
               <span className="ux-node-card-desc">Load the ticket summary and description</span>
             </button>
+            <button type="button" className="ux-node-card" onClick={() => addNode('jiraUpdate')} disabled={!canEditGraph}>
+              <span className="ux-node-card-title">Jira update</span>
+              <span className="ux-node-card-desc">Transition the ticket or post a comment once per run</span>
+            </button>
             <button type="button" className="ux-node-card" onClick={() => addNode('analysis')} disabled={!canEditGraph}>
               <span className="ux-node-card-title">Analysis</span>
               <span className="ux-node-card-desc">Summarize the ticket before anyone edits the repo</span>
@@ -864,6 +913,10 @@ export default function WorkflowEditor() {
             <button type="button" className="ux-node-card" onClick={() => addNode('cursorAgent')} disabled={!canEditGraph}>
               <span className="ux-node-card-title">Cursor agent</span>
               <span className="ux-node-card-desc">Edit the worktree. Done follows true, failure follows false</span>
+            </button>
+            <button type="button" className="ux-node-card" onClick={() => addNode('testSelect')} disabled={!canEditGraph}>
+              <span className="ux-node-card-title">Test select</span>
+              <span className="ux-node-card-desc">Map the diff to Playwright modules or tags</span>
             </button>
             <button type="button" className="ux-node-card" onClick={() => addNode('playwright')} disabled={!canEditGraph}>
               <span className="ux-node-card-title">Playwright</span>
@@ -956,9 +1009,22 @@ export default function WorkflowEditor() {
                     {starting ? 'Starting…' : 'Run now'}
                   </button>
                 </div>
+                <label className="field jira-issue-field">
+                  <span>Jira ticket</span>
+                  <input
+                    value={jiraIssue}
+                    onChange={(e) => setJiraIssue(e.target.value)}
+                    placeholder="MF-123 or https://…/browse/MF-123"
+                    disabled={starting}
+                  />
+                </label>
+                {error ? <div className="alert alert-error">{error}</div> : null}
+                {message ? <div className="alert alert-success">{message}</div> : null}
                 <p className="muted small">
                   While paused, incoming webhooks and cron are rejected. Run now needs an active (non-paused)
-                  workflow.
+                  workflow. Paste a Jira link or key to run that ticket; leave it empty to start this workflow
+                  with no input. If that ticket already has a live run, Run now opens it instead of starting a
+                  second one.
                 </p>
               </div>
 
@@ -1236,7 +1302,40 @@ export default function WorkflowEditor() {
                 />
               </label>
             </div>
-          ) : selectedNode && ['jira', 'analysis', 'cursorPrompt', 'gitBranch', 'cursorAgent', 'githubPr'].includes(nodeKind) ? (
+          ) : selectedNode && nodeKind === 'jiraUpdate' ? (
+            <div className="form-stack tight">
+              <p className="muted small">
+                Transitions and comments run once per step. A run and stage marker is added so a retry does not
+                post twice. Retries default to 1.
+              </p>
+              <label className="field">
+                <span>Title</span>
+                <input
+                  value={selectedNode.data?.config?.title || ''}
+                  onChange={(e) => updateSelectedNodeConfig({ title: e.target.value })}
+                  disabled={!canEditGraph}
+                />
+              </label>
+              <label className="field">
+                <span>Transition</span>
+                <input
+                  value={selectedNode.data?.config?.transition || ''}
+                  onChange={(e) => updateSelectedNodeConfig({ transition: e.target.value })}
+                  placeholder="claim, review, blocked, or a status name"
+                  disabled={!canEditGraph}
+                />
+              </label>
+              <label className="field">
+                <span>Comment</span>
+                <textarea
+                  rows={3}
+                  value={selectedNode.data?.config?.comment || ''}
+                  onChange={(e) => updateSelectedNodeConfig({ comment: e.target.value })}
+                  disabled={!canEditGraph}
+                />
+              </label>
+            </div>
+          ) : selectedNode && ['jira', 'analysis', 'cursorPrompt', 'gitBranch', 'cursorAgent', 'rulesChecks', 'testSelect', 'githubPr'].includes(nodeKind) ? (
             <div className="form-stack tight">
               <p className="muted small">
                 This title is a label. Repository paths, API tokens, and model keys stay in the worker environment.
@@ -1249,6 +1348,36 @@ export default function WorkflowEditor() {
                   disabled={!canEditGraph}
                 />
               </label>
+              {nodeKind === 'testSelect' ? (
+                <label className="field">
+                  <span>Mode</span>
+                  <select
+                    value={selectedNode.data?.config?.mode || ''}
+                    onChange={(e) => updateSelectedNodeConfig({ mode: e.target.value })}
+                    disabled={!canEditGraph}
+                  >
+                    <option value="">From project profile</option>
+                    <option value="app">App ticket</option>
+                    <option value="automation">Automation ticket</option>
+                  </select>
+                </label>
+              ) : null}
+              {nodeKind === 'cursorAgent' || nodeKind === 'cursorPrompt' ? (
+                <label className="field">
+                  <span>Mode</span>
+                  <select
+                    value={selectedNode.data?.config?.mode || ''}
+                    onChange={(e) => updateSelectedNodeConfig({ mode: e.target.value })}
+                    disabled={!canEditGraph}
+                  >
+                    <option value="">Default</option>
+                    <option value="plan">Plan</option>
+                    <option value="implement">Implement</option>
+                    <option value="fix">Fix</option>
+                    <option value="review">Review</option>
+                  </select>
+                </label>
+              ) : null}
             </div>
           ) : selectedNode && nodeKind === 'playwright' ? (
             <div className="form-stack tight">

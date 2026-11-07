@@ -77,10 +77,13 @@ async function executeNode(node, input, runState) {
     }
 
     case "jira":
+    case "jiraUpdate":
     case "analysis":
     case "cursorPrompt":
     case "gitBranch":
     case "cursorAgent":
+    case "rulesChecks":
+    case "testSelect":
     case "playwright":
     case "githubPr":
       return require("./lifecycle")[node.type](node, input, runState);
@@ -98,28 +101,49 @@ async function executeNode(node, input, runState) {
             : decision === "approved"
               ? "true"
               : "false";
-        return { ...base, branch };
+        const stored = runState && runState.approval;
+        const planApproval =
+          stored && stored.planHash
+            ? {
+                decision: stored.decision,
+                planHash: stored.planHash,
+                fingerprint: stored.fingerprint,
+                expiresAt: stored.expiresAt,
+                baseSha: stored.baseSha,
+                approvedBy: stored.userId,
+                approvedAt: stored.decidedAt,
+              }
+            : base.planApproval;
+        return { ...base, branch, planApproval };
       }
       return { control: "wait", kind: "approval", output: input };
     }
 
     case "notify": {
-      const url = config.slackWebhookUrl;
-      if (!url) {
-        return {
-          ...(input && typeof input === "object" && !Array.isArray(input)
-            ? input
-            : { payload: input }),
-          _notifySkipped: true,
-        };
-      }
+      const slack = require("../services/slackService");
       const raw =
         typeof cfg.message === "string" ? cfg.message : "Workflow notification";
       const text = interpolateMessage(raw, input);
-      await axios.post(url, { text }, { timeout: 15000 });
-      return input && typeof input === "object" && !Array.isArray(input)
-        ? input
-        : { payload: input };
+      const typed = typeof cfg.eventType === "string" ? cfg.eventType.trim() : "";
+      const type = slack.EVENT_TYPE_SET.has(typed) ? typed : "notify";
+      const runId = runState && runState.runId;
+      const result = await slack.emit(runId, type, {
+        reason: text,
+        message: text,
+        nodeId: node.id,
+        jiraKey: input && (input.issueKey || (input.jira && input.jira.key)),
+        project: input && input.profileKey,
+        prUrl: input && input.prUrl,
+        stage: cfg.stage,
+      });
+      const payload =
+        input && typeof input === "object" && !Array.isArray(input)
+          ? { ...input }
+          : { payload: input };
+      payload.message = text;
+      payload.eventType = type;
+      if (result && (result.skipped || result.status === "logged")) payload._notifySkipped = true;
+      return payload;
     }
 
     default:

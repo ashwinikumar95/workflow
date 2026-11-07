@@ -26,10 +26,18 @@ const defaultApprovalConfig = () => ({
 })
 
 const defaultJiraConfig = () => ({ title: 'Jira' })
+const defaultJiraUpdateConfig = () => ({
+  title: 'Jira update',
+  transition: '',
+  comment: '',
+  retries: 1,
+})
 const defaultAnalysisConfig = () => ({ title: 'Analysis' })
-const defaultCursorPromptConfig = () => ({ title: 'Cursor prompt' })
+const defaultCursorPromptConfig = () => ({ title: 'Cursor prompt', mode: '' })
 const defaultGitBranchConfig = () => ({ title: 'Git branch' })
-const defaultCursorAgentConfig = () => ({ title: 'Cursor agent' })
+const defaultCursorAgentConfig = () => ({ title: 'Cursor agent', mode: '' })
+const defaultRulesChecksConfig = () => ({ title: 'Rules checks' })
+const defaultTestSelectConfig = () => ({ title: 'Test select', mode: '' })
 const defaultPlaywrightConfig = () => ({
   title: 'Playwright',
   strategy: '',
@@ -40,9 +48,9 @@ const defaultPlaywrightConfig = () => ({
   testCommand: [],
   testRepository: { location: '', defaultBranch: '', credentialRef: '' },
 })
-const defaultGithubPrConfig = () => ({ title: 'Pull request' })
+const defaultGithubPrConfig = () => ({ title: 'Pull request', retries: 1 })
 
-const branchTypes = new Set(['approval', 'cursorAgent', 'playwright'])
+const branchTypes = new Set(['approval', 'cursorAgent', 'playwright', 'condition', 'rulesChecks'])
 
 export function defaultConfigForType(type) {
   switch (type) {
@@ -56,6 +64,8 @@ export function defaultConfigForType(type) {
       return defaultApprovalConfig()
     case 'jira':
       return defaultJiraConfig()
+    case 'jiraUpdate':
+      return defaultJiraUpdateConfig()
     case 'analysis':
       return defaultAnalysisConfig()
     case 'cursorPrompt':
@@ -64,6 +74,10 @@ export function defaultConfigForType(type) {
       return defaultGitBranchConfig()
     case 'cursorAgent':
       return defaultCursorAgentConfig()
+    case 'rulesChecks':
+      return defaultRulesChecksConfig()
+    case 'testSelect':
+      return defaultTestSelectConfig()
     case 'playwright':
       return defaultPlaywrightConfig()
     case 'githubPr':
@@ -117,10 +131,13 @@ const labels = {
   notify: 'Notify',
   approval: 'Approval',
   jira: 'Jira',
+  jiraUpdate: 'Jira update',
   analysis: 'Analysis',
   cursorPrompt: 'Cursor prompt',
   gitBranch: 'Git branch',
   cursorAgent: 'Cursor agent',
+  rulesChecks: 'Rules checks',
+  testSelect: 'Test select',
   playwright: 'Playwright',
   githubPr: 'Pull request',
 }

@@ -1,9 +1,13 @@
+const path = require("path");
 const { calculateObjectSize } = require("bson");
 const { v4: uuidv4 } = require("uuid");
 const Workflow = require("../models/workflow");
 const Run = require("../models/Run");
+const TicketRun = require("../models/TicketRun");
 const config = require("../../config");
 const nodes = require("../nodes");
+const ticketState = require("./ticketState");
+const { cancelledError } = require("./runControl");
 
 const CONTEXT_LIMIT_BYTES = 256 * 1024;
 const pipelineUpdate = { returnDocument: "after", updatePipeline: true };
@@ -20,6 +24,8 @@ const engine = {
   resumeWorkflow,
   getNextNode,
   executeWithRetry,
+  carryForward,
+  preview,
 };
 
 function claimBusy() {
@@ -35,10 +41,72 @@ function resolveJobId(jobId) {
   return uuidv4();
 }
 
+const PREVIEW_SKIP = new Set([
+  "analysis",
+  "artifactDir",
+  "description",
+  "descriptionText",
+  "fingerprint",
+  "issueId",
+  "jira",
+  "plan",
+  "profileKey",
+  "prompt",
+  "repoPath",
+  "rulesApplied",
+  "rulesManifest",
+  "source",
+  "worktreePath",
+]);
+
+function compactPreview(value) {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) return value;
+  const out = {};
+  const jira = value.jira && typeof value.jira === "object" ? value.jira : {};
+  if (typeof value.issueKey === "string" && value.issueKey) out.issueKey = value.issueKey;
+  else if (typeof jira.key === "string" && jira.key) out.issueKey = jira.key;
+  const summary = value.summary || jira.summary;
+  if (typeof summary === "string" && summary) out.summary = summary.slice(0, 120);
+  if (value.branch === true || value.branch === "true" || value.branch === false || value.branch === "false") {
+    out.branch = String(value.branch);
+  }
+  if (value.reason != null && value.reason !== "") out.reason = String(value.reason).slice(0, 80);
+  if (value.message != null && value.message !== "") out.message = String(value.message).slice(0, 80);
+  if (typeof value.prUrl === "string" && value.prUrl) out.prUrl = value.prUrl;
+  if (typeof value.agentMode === "string" && value.agentMode) out.agentMode = value.agentMode;
+  if (value.guardFailed) out.guardFailed = true;
+  if (typeof value.prompt === "string" && value.prompt.trim()) {
+    out.prompt = value.prompt.trim().slice(0, 80);
+  }
+  if (value.plan && typeof value.plan === "object" && value.plan.approach) {
+    out.plan = String(value.plan.approach).slice(0, 80);
+  }
+  for (const [key, val] of Object.entries(value)) {
+    if (key in out || PREVIEW_SKIP.has(key) || val == null || typeof val === "object") continue;
+    const text = String(val);
+    out[key] = text.length > 80 ? text.slice(0, 80) : val;
+  }
+  return out;
+}
+
 function preview(value) {
-  const text = JSON.stringify(value);
-  if (typeof text !== "string") return "";
-  return text.slice(0, 200);
+  if (value === undefined) return "";
+  if (value === null) return "null";
+  if (typeof value !== "object") {
+    const text = String(value);
+    return text.length <= 200 ? text : text.slice(0, 200);
+  }
+  const compact = compactPreview(value);
+  const keys = Object.keys(compact);
+  while (keys.length) {
+    const text = JSON.stringify(compact);
+    if (typeof text === "string" && text.length <= 200) return text;
+    const drop = keys.pop();
+    delete compact[drop];
+  }
+  const fallback = JSON.stringify(value);
+  if (typeof fallback !== "string") return "";
+  return fallback.slice(0, 200);
 }
 
 function assertContextLimit(context) {
@@ -131,25 +199,71 @@ async function persistRun(runId, token, patch) {
       $concatArrays: [{ $ifNull: ["$logs", []] }, [{ $literal: patch.log }]],
     };
   }
-  return Run.findOneAndUpdate(
+  const saved = await Run.findOneAndUpdate(
     holderFilter(runId, token),
     externalPipeline(setDoc, patch.external),
     pipelineUpdate
   );
+  if (saved && patch.status === "failed") {
+    await ticketState.markEnded(saved._id, "failed", {
+      failureReason: patch.log && patch.log.error,
+    });
+  }
+  return saved;
 }
 
 function externalPipeline(setDoc, external) {
   const pipeline = [{ $set: setDoc }];
-  if (external && typeof external === "object" && !Array.isArray(external)) {
+  if (!external || typeof external !== "object" || Array.isArray(external)) return pipeline;
+  const repos = external.repos;
+  const rest = { ...external };
+  delete rest.repos;
+  if (Object.keys(rest).length > 0) {
     pipeline.push({
       $set: {
         external: {
-          $mergeObjects: [{ $ifNull: ["$external", {}] }, { $literal: external }],
+          $mergeObjects: [{ $ifNull: ["$external", {}] }, { $literal: rest }],
         },
       },
     });
   }
+  if (repos && typeof repos === "object" && !Array.isArray(repos)) {
+    for (const role of ["app", "automation"]) {
+      const entry = repos[role];
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+      pipeline.push({
+        $set: {
+          [`external.repos.${role}`]: {
+            $mergeObjects: [
+              { $ifNull: [`$external.repos.${role}`, {}] },
+              { $literal: entry },
+            ],
+          },
+        },
+      });
+    }
+  }
   return pipeline;
+}
+
+function cloneExternal(external) {
+  if (!external || typeof external !== "object" || Array.isArray(external)) return {};
+  const source = typeof external.toObject === "function" ? external.toObject() : external;
+  const copy = { ...source };
+  if (source.repos && typeof source.repos === "object" && !Array.isArray(source.repos)) {
+    copy.repos = {};
+    for (const role of Object.keys(source.repos)) {
+      const entry = source.repos[role];
+      copy.repos[role] =
+        entry && typeof entry === "object" && !Array.isArray(entry) ? { ...entry } : entry;
+    }
+  }
+  return copy;
+}
+
+function replaceExternal(target, external) {
+  for (const key of Object.keys(target)) delete target[key];
+  Object.assign(target, cloneExternal(external));
 }
 
 const NODE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -297,6 +411,12 @@ function approvalResumeState(run, node) {
   return { decision };
 }
 
+function attemptsFor(node) {
+  const raw = node && node.config && node.config.retries;
+  if (typeof raw === "number" && Number.isInteger(raw) && raw >= 1) return raw;
+  return 3;
+}
+
 async function executeWithRetry(node, input, retries = 3, runState) {
   let lastError;
   for (let i = 0; i < retries; i++) {
@@ -311,6 +431,22 @@ async function executeWithRetry(node, input, retries = 3, runState) {
     }
   }
   throw lastError;
+}
+
+function carryForward(previous, output) {
+  if (output && typeof output === "object" && !Array.isArray(output)) return output;
+  const base =
+    previous && typeof previous === "object" && !Array.isArray(previous)
+      ? { ...previous }
+      : previous === undefined
+        ? {}
+        : { payload: previous };
+  if (output === true || output === false) {
+    base.branch = output ? "true" : "false";
+    return base;
+  }
+  if (output !== undefined) base.payload = output;
+  return base;
 }
 
 function getNextNode(workflow, currentNode, result) {
@@ -392,19 +528,115 @@ async function loadOrCreateRun(workflowId, jobId) {
   }
 }
 
-async function maybeNotifyRunFailure(workflowId, message) {
-  const axios = require("axios");
-  const url = config.slackWebhookUrl;
-  if (!url) return;
-  try {
-    await axios.post(
-      url,
-      { text: `Workflow run failed (${String(workflowId)}): ${message}` },
-      { timeout: 8000 }
-    );
-  } catch (e) {
-    console.error("[executeWorkflow] Failure notify to Slack failed:", e.message);
+async function maybeNotifyRunFailure(runId, message) {
+  const slack = require("./slackService");
+  await slack.emit(runId, slack.typeFromFailure(message), {
+    reason: message,
+  });
+}
+
+function stageForNode(node) {
+  if (!node) return "";
+  if (node.config && typeof node.config.ticketStage === "string" && node.config.ticketStage) {
+    return node.config.ticketStage;
   }
+  switch (node.type) {
+    case "jiraUpdate":
+      return node.config && node.config.action === "review" ? "jira_closeout" : "claimed";
+    case "gitBranch":
+      return "claimed";
+    case "cursorAgent": {
+      const mode = node.config && node.config.mode;
+      if (mode === "plan") return "planning";
+      if (mode === "review") return "rules_review";
+      return "implementing";
+    }
+    case "approval":
+      return "awaiting_approval";
+    case "testSelect":
+      return "verifying";
+    case "playwright":
+      return "playwright";
+    case "githubPr":
+      return "pr_open";
+    default:
+      return "";
+  }
+}
+
+function stateForStage(stage) {
+  switch (stage) {
+    case "claimed":
+      return "claimed";
+    case "planning":
+      return "planning";
+    case "awaiting_approval":
+      return "awaiting_approval";
+    case "queued":
+    case "acquireResources":
+      return "queued";
+    case "implementing":
+      return "implementing";
+    case "playwright":
+    case "gates":
+    case "rules_review":
+    case "baseline":
+    case "verifying":
+      return "verifying";
+    case "pr_open":
+    case "push":
+      return "pr_open";
+    case "blocked":
+      return "blocked";
+    case "rejected":
+      return "rejected";
+    case "completed":
+    case "jira_closeout":
+      return "completed";
+    default:
+      return "";
+  }
+}
+
+async function isRunCancelled(runId) {
+  const ticket = await TicketRun.findOne({ runId: String(runId) }).select("state").lean();
+  if (ticket && ticket.state === "cancelled") return true;
+  const row = await Run.findById(runId).select("status").lean();
+  return Boolean(row && row.status === "cancelled");
+}
+
+async function persistCancelled(runId, token, patch) {
+  const saved = await engine.persistRun(runId, token, {
+    context: patch.context,
+    currentNodeId: patch.currentNodeId ?? null,
+    status: "cancelled",
+    ended: true,
+    log: patch.log,
+  });
+  if (!saved) throw claimBusy();
+  const slack = require("./slackService");
+  await slack.emit(runId, "cancelled", { reason: "cancelled" });
+  return Run.findById(runId);
+}
+
+async function syncTicketStage(run, node) {
+  const ticket = await TicketRun.findOne({ runId: String(run._id) });
+  if (!ticket) return null;
+  if (ticket.state === "cancelled") throw cancelledError();
+  const stage = stageForNode(node);
+  if (stage && stage !== ticket.stage) {
+    await TicketRun.updateOne(
+      { _id: ticket._id, state: { $ne: "cancelled" } },
+      { $set: { stage } }
+    );
+  }
+  const nextState = stateForStage(stage);
+  if (nextState && nextState !== ticket.state && ticketState.isAllowed(ticket.state, nextState)) {
+    await ticketState.transition(ticket._id, ticket.state, nextState, { stage: stage || ticket.stage });
+  }
+  const latest = await TicketRun.findById(ticket._id);
+  if (latest && latest.state === "cancelled") throw cancelledError();
+  return latest;
 }
 
 async function executeWorkflow(workflowId, inputData = {}, jobId) {
@@ -425,6 +657,8 @@ async function executeWorkflow(workflowId, inputData = {}, jobId) {
   const run = await loadOrCreateRun(workflowId, resolvedJobId);
   if (run.status === "success") return run;
   if (run.status === "waiting") return run;
+  if (run.status === "cancelled") return run;
+  if (run.status === "interrupted") return run;
 
   const leaseMs = config.executionClaimLeaseMs;
   const claimed = await engine.acquireExecutionClaim(run._id, leaseMs);
@@ -444,6 +678,14 @@ async function executeWorkflow(workflowId, inputData = {}, jobId) {
     });
     if (!failed) throw claimBusy();
     throw err;
+  }
+
+  if (await isRunCancelled(claimed._id)) {
+    return persistCancelled(claimed._id, token, {
+      context: inputData,
+      currentNodeId: position.node ? position.node.id : claimed.currentNodeId,
+      log: { status: "cancelled", error: "cancelled" },
+    });
   }
 
   return walkClaimed(workflow, claimed, token, position, leaseMs);
@@ -509,17 +751,43 @@ async function enqueueExternalJob(saved, output) {
   }
 }
 
-async function cleanupWorktree(runId) {
+function worktreeTargets(external) {
+  const targets = [];
+  const push = (entry) => {
+    if (!entry || !entry.worktreePath || !entry.repoPath) return;
+    const resolved = path.resolve(entry.worktreePath);
+    if (targets.some((item) => item.resolved === resolved)) return;
+    targets.push({
+      resolved,
+      worktreePath: entry.worktreePath,
+      repoPath: entry.repoPath,
+    });
+  };
+  if (external && typeof external === "object") {
+    push(external);
+    if (external.repos && typeof external.repos === "object") {
+      for (const entry of Object.values(external.repos)) push(entry);
+    }
+  }
+  return targets;
+}
+
+async function cleanupWorktree(runId, workflow) {
+  const git = require("./gitService");
+  if (git.keepsWorktreeOnFailure(workflow)) return;
   try {
     const row = await Run.findById(runId);
-    const external = row && row.external;
-    if (!external || !external.worktreePath || !external.repoPath) return;
-    const git = require("./gitService");
-    await git.removeWorktree({
-      repoPath: external.repoPath,
-      worktreePath: external.worktreePath,
-      worktreesDir: config.worktreesDir,
-    });
+    for (const target of worktreeTargets(row && row.external)) {
+      try {
+        await git.removeWorktree({
+          repoPath: target.repoPath,
+          worktreePath: target.worktreePath,
+          worktreesDir: config.worktreesDir,
+        });
+      } catch (err) {
+        console.error("[executeWorkflow] worktree remove failed:", err.message);
+      }
+    }
   } catch (err) {
     console.error("[executeWorkflow] worktree remove failed:", err.message);
   }
@@ -530,12 +798,29 @@ async function walkClaimed(workflow, run, token, position, leaseMs) {
   let currentInput = position.input;
   let isFirstNode = true;
   let predecessorId = null;
-  const externalState =
-    run.external && typeof run.external === "object" && !Array.isArray(run.external)
-      ? { ...run.external }
-      : {};
+  const externalState = cloneExternal(run.external);
 
   while (currentNode) {
+    if (await isRunCancelled(run._id)) {
+      return persistCancelled(run._id, token, {
+        context: currentInput,
+        currentNodeId: currentNode.id,
+        log: { nodeId: currentNode.id, status: "cancelled", error: "cancelled" },
+      });
+    }
+    try {
+      await syncTicketStage(run, currentNode);
+    } catch (err) {
+      if (err && err.code === "RUN_CANCELLED") {
+        return persistCancelled(run._id, token, {
+          context: currentInput,
+          currentNodeId: currentNode.id,
+          log: { nodeId: currentNode.id, status: "cancelled", error: "cancelled" },
+        });
+      }
+      throw err;
+    }
+
     if (!isFirstNode) {
       const renewed = await engine.renewExecutionClaim(run._id, token, leaseMs);
       if (!renewed) throw claimBusy();
@@ -559,10 +844,14 @@ async function walkClaimed(workflow, run, token, position, leaseMs) {
       workflowId: String(workflow._id),
       nodeId: currentNode.id,
       workflow,
+      node: currentNode,
+      context: currentInput,
       predecessorId,
       external: externalState,
       resumed,
       decision: resumed && run.approval ? run.approval.decision : undefined,
+      approval: resumed ? run.approval : undefined,
+      wait: run.wait,
       completion: resumed ? run.wait.completion : undefined,
       checkpointExternal: async (external) => {
         const saved = await engine.persistRun(run._id, token, {
@@ -572,13 +861,20 @@ async function walkClaimed(workflow, run, token, position, leaseMs) {
           external,
         });
         if (!saved) throw claimBusy();
-        Object.assign(externalState, external);
+        if (saved.external && typeof saved.external === "object") {
+          replaceExternal(externalState, saved.external);
+        }
       },
     };
     let output;
     let thrown = null;
     try {
-      output = await executeWithRetry(currentNode, currentInput, 3, runState);
+      output = await executeWithRetry(
+        currentNode,
+        currentInput,
+        attemptsFor(currentNode),
+        runState
+      );
     } catch (err) {
       thrown = err;
     } finally {
@@ -588,6 +884,18 @@ async function walkClaimed(workflow, run, token, position, leaseMs) {
     if (renewer.lost()) throw claimBusy();
 
     if (thrown) {
+      if (thrown.code === "RUN_CANCELLED" || (await isRunCancelled(run._id))) {
+        return persistCancelled(run._id, token, {
+          context: currentInput,
+          currentNodeId: currentNode.id,
+          log: {
+            nodeId: currentNode.id,
+            status: "cancelled",
+            error: thrown.code === "RUN_CANCELLED" ? "cancelled" : thrown.message,
+            input: preview(currentInput),
+          },
+        });
+      }
       const failed = await engine.persistRun(run._id, token, {
         context: currentInput,
         currentNodeId: currentNode.id,
@@ -601,8 +909,8 @@ async function walkClaimed(workflow, run, token, position, leaseMs) {
         },
       });
       if (!failed) throw claimBusy();
-      await cleanupWorktree(run._id);
-      await maybeNotifyRunFailure(workflow._id, thrown.message);
+      await cleanupWorktree(run._id, workflow);
+      await maybeNotifyRunFailure(run._id, thrown.message);
       throw thrown;
     }
 
@@ -644,6 +952,14 @@ async function walkClaimed(workflow, run, token, position, leaseMs) {
         },
       });
       if (!saved) throw claimBusy();
+      if (output.kind === "approval") {
+        const slack = require("./slackService");
+        await slack.emit(run._id, "waiting_for_approval", {
+          nodeId: currentNode.id,
+          stage: "awaiting_approval",
+          reason: "waiting for approval",
+        });
+      }
       if (output.kind === "agent" || output.kind === "playwright") {
         await enqueueExternalJob(saved, output);
       }
@@ -652,8 +968,9 @@ async function walkClaimed(workflow, run, token, position, leaseMs) {
 
     const next = getNextNode(workflow, currentNode, output);
     const done = next == null;
+    const nextInput = carryForward(currentInput, output);
     const saved = await engine.persistRun(run._id, token, {
-      context: output,
+      context: nextInput,
       currentNodeId: next ? next.id : null,
       status: done ? "success" : "running",
       ended: done,
@@ -668,7 +985,7 @@ async function walkClaimed(workflow, run, token, position, leaseMs) {
     if (!saved) throw claimBusy();
 
     predecessorId = currentNode.id;
-    currentInput = output;
+    currentInput = nextInput;
     currentNode = next;
   }
 

@@ -1,0 +1,122 @@
+{
+  "config": {
+    "version": "1.48.2",
+    "workers": 4,
+    "projects": [{ "name": "chromium" }]
+  },
+  "suites": [
+    {
+      "title": "",
+      "file": "",
+      "specs": [],
+      "suites": [
+        {
+          "title": "tests/e2e/stock-transfer/stock-transfer.spec.ts",
+          "file": "tests/e2e/stock-transfer/stock-transfer.spec.ts",
+          "specs": [
+            {
+              "title": "creates a stock transfer",
+              "ok": true,
+              "file": "tests/e2e/stock-transfer/stock-transfer.spec.ts",
+              "tests": [
+                {
+                  "timeout": 500000,
+                  "expectedStatus": "passed",
+                  "projectName": "chromium",
+                  "status": "expected",
+                  "results": [
+                    {
+                      "status": "passed",
+                      "duration": 1840,
+                      "retry": 0,
+                      "errors": [],
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "shows quantity validation",
+              "ok": false,
+              "file": "tests/e2e/stock-transfer/stock-transfer.spec.ts",
+              "tests": [
+                {
+                  "timeout": 500000,
+                  "expectedStatus": "passed",
+                  "projectName": "chromium",
+                  "status": "unexpected",
+                  "results": [
+                    {
+                      "status": "failed",
+                      "duration": 30120,
+                      "retry": 0,
+                      "error": {
+                        "message": "Timeout 30000ms exceeded.\nwaiting for getByRole('button', { name: 'Save' })"
+                      },
+                      "errors": [
+                        {
+                          "message": "Timeout 30000ms exceeded.\nwaiting for getByRole('button', { name: 'Save' })"
+                        }
+                      ],
+                      "attachments": [
+                        {
+                          "name": "trace",
+                          "path": "test-results/stock-transfer-validation/trace.zip",
+                          "contentType": "application/zip"
+                        },
+                        {
+                          "name": "screenshot",
+                          "path": "test-results/stock-transfer-validation/test-failed-1.png",
+                          "contentType": "image/png"
+                        }
+                      ],
+                      "steps": [
+                        { "title": "Open stock transfer", "status": "passed" },
+                        {
+                          "title": "Click Save",
+                          "status": "failed",
+                          "error": { "message": "Timeout 30000ms exceeded." }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "loads the list after retry",
+              "ok": true,
+              "file": "tests/e2e/stock-transfer/stock-transfer.spec.ts",
+              "tests": [
+                {
+                  "timeout": 500000,
+                  "expectedStatus": "passed",
+                  "projectName": "chromium",
+                  "status": "flaky",
+                  "results": [
+                    {
+                      "status": "failed",
+                      "duration": 800,
+                      "retry": 0,
+                      "error": { "message": "net::ERR_CONNECTION_RESET" },
+                      "errors": [{ "message": "net::ERR_CONNECTION_RESET" }],
+                      "attachments": []
+                    },
+                    {
+                      "status": "passed",
+                      "duration": 1100,
+                      "retry": 1,
+                      "errors": [],
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+---
+alwaysApply: true
+---
+# Mt-Fuji-Central project rules
+Use Vue 3 Options API. This is Central, not DMS. Do not edit generated `dist/` output.

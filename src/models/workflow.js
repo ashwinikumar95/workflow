@@ -54,6 +54,19 @@ const workflowSchema = new mongoose.Schema({
     defaultBranch: String,
     credentialRef: String,
   },
+
+  retention: {
+    keepWorktreeOnFailure: { type: Boolean, default: false },
+    worktreeDays: { type: Number, default: 7 },
+  },
+
+  runtime: {
+    type: String,
+    enum: ["docker", "host"],
+  },
+
+  /** Jira project key this published workflow belongs to (MF, MFC, QUT, TAC). */
+  profileKey: String,
 }, { timestamps: true });
 
 module.exports =

@@ -1,0 +1,81 @@
+{
+  "config": {
+    "version": "1.48.2",
+    "workers": 4,
+    "projects": [{ "name": "chromium" }]
+  },
+  "suites": [
+    {
+      "title": "",
+      "file": "",
+      "specs": [],
+      "suites": [
+        {
+          "title": "tests/e2e/login/login.spec.ts",
+          "file": "tests/e2e/login/login.spec.ts",
+          "specs": [
+            {
+              "title": "logs in as [@TAC-3-2] central user",
+              "ok": true,
+              "file": "tests/e2e/login/login.spec.ts",
+              "tests": [
+                {
+                  "timeout": 500000,
+                  "expectedStatus": "passed",
+                  "projectName": "chromium",
+                  "status": "expected",
+                  "results": [
+                    {
+                      "status": "passed",
+                      "duration": 2200,
+                      "retry": 0,
+                      "errors": [],
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "rejects a bad password",
+              "ok": false,
+              "file": "tests/e2e/login/login.spec.ts",
+              "tests": [
+                {
+                  "timeout": 500000,
+                  "expectedStatus": "passed",
+                  "projectName": "chromium",
+                  "status": "unexpected",
+                  "results": [
+                    {
+                      "status": "failed",
+                      "duration": 1500,
+                      "retry": 0,
+                      "error": { "message": "expect(locator).toBeVisible() failed" },
+                      "errors": [{ "message": "expect(locator).toBeVisible() failed" }],
+                      "attachments": [
+                        {
+                          "name": "trace",
+                          "path": "test-results/login-bad-password/trace.zip",
+                          "contentType": "application/zip"
+                        }
+                      ],
+                      "steps": [
+                        { "title": "Fill password", "status": "passed" },
+                        {
+                          "title": "Expect error banner",
+                          "status": "failed",
+                          "error": { "message": "expect(locator).toBeVisible() failed" }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

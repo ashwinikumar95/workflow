@@ -83,6 +83,29 @@ module.exports = {
   get jiraWebhookSecret() {
     return process.env.JIRA_WEBHOOK_SECRET || "";
   },
+  /**
+   * Cron for the Jira bucket dispatcher. Unset defaults to every 5 minutes.
+   * An empty string disables it.
+   */
+  get jiraDispatchCron() {
+    if (process.env.JIRA_DISPATCH_CRON === "") return "";
+    return process.env.JIRA_DISPATCH_CRON || "*/5 * * * *";
+  },
+  /**
+   * Cap on issues pulled per profile per dispatcher poll. A large bucket is
+   * truncated rather than walked until Jira rate-limits the worker.
+   */
+  get jiraSearchMaxIssues() {
+    return parsePositiveInt(process.env.JIRA_SEARCH_MAX_ISSUES, 200);
+  },
+  /**
+   * Pause between Jira search pages. `0` disables the pause (tests).
+   */
+  get jiraSearchPageDelayMs() {
+    const raw = process.env.JIRA_SEARCH_PAGE_DELAY_MS;
+    if (raw !== undefined && String(raw).trim() === "0") return 0;
+    return parsePositiveInt(raw, 100);
+  },
   get analysisBaseUrl() {
     return process.env.ANALYSIS_BASE_URL || "";
   },
@@ -164,6 +187,15 @@ module.exports = {
   get playwrightArtifactsDir() {
     return process.env.PLAYWRIGHT_ARTIFACTS_DIR || "";
   },
+  get artifactsDir() {
+    return process.env.ARTIFACTS_DIR || process.env.PLAYWRIGHT_ARTIFACTS_DIR || "";
+  },
+  get artifactRetentionPublicDays() {
+    return parsePositiveInt(process.env.ARTIFACT_RETENTION_PUBLIC_DAYS, 30);
+  },
+  get artifactRetentionPrivateDays() {
+    return parsePositiveInt(process.env.ARTIFACT_RETENTION_PRIVATE_DAYS, 7);
+  },
   get playwrightMemory() {
     return process.env.PLAYWRIGHT_MEMORY || "2g";
   },
@@ -173,6 +205,13 @@ module.exports = {
 
   /** Optional: Slack incoming webhook for Notify node + run failure alerts */
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL || undefined,
+
+  /** Public origin for run links in Slack (no trailing slash). */
+  get appBaseUrl() {
+    const raw = process.env.APP_BASE_URL || process.env.PUBLIC_APP_URL || "";
+    if (raw.trim()) return raw.trim().replace(/\/$/, "");
+    return `http://localhost:${this.port}`;
+  },
 
   /** BullMQ / ioredis — used by `src/services/queue.js` and `src/workers/worker.js` */
   redisHost: process.env.REDIS_HOST || "127.0.0.1",

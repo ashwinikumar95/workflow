@@ -1,0 +1,13 @@
+---
+alwaysApply: true
+---
+
+# Frontend security rules for Mt-Fuji-Central
+
+- Never hardcode secrets, API tokens, or `.env` values. Configuration stays in environment files that are not committed.
+- Do not use `v-html` with untrusted data. Prefer text interpolation (`{{ }}`). If HTML is unavoidable, the ticket must say why and the source must be trusted.
+- Validate and constrain user input before API calls. Do not rely on the UI as the only check.
+- Do not store auth tokens in new `localStorage` / `sessionStorage` keys. Follow the existing auth/session pattern.
+- Do not log credentials, cookies, or personal data.
+- Encode values used in URLs, query strings, and HTML attributes.
+- File uploads must keep the existing type/size checks; do not widen them without an explicit request.

@@ -6,6 +6,7 @@ const require = createRequire(import.meta.url);
 const config = require("../../config");
 const { handleAgentJob } = require("../services/agentAttempt");
 const { getAgentQueue } = require("../services/queue");
+const { startAgentHost } = require("../services/hostRunners");
 
 const connection = config.redisConnection;
 
@@ -50,14 +51,35 @@ function startAgentWorker() {
   const worker = new Worker(
     "agent-queue",
     async (job) => {
+      const data = job.data || {};
+      console.log(
+        "[agent-worker] Job picked up — jobId:",
+        job.id,
+        "nodeId:",
+        data.nodeId,
+        "mode:",
+        data.mode,
+        "runtime:",
+        data.runtime
+      );
+      const runtime = data.runtime;
       await handleAgentJob(job, {
         enqueueSettle,
         egressHosts: config.cursorEgressHosts,
-        startContainer,
+        startContainer: runtime === "host" ? startAgentHost : startContainer,
       });
+      console.log("[agent-worker] Job finished — jobId:", job.id);
     },
     { connection, concurrency: 1 }
   );
+  worker.on("failed", (job, err) => {
+    console.error(
+      "[agent-worker] Job failed — jobId:",
+      job && job.id,
+      "error:",
+      err && err.message
+    );
+  });
   worker.on("error", (err) => {
     console.error("[agent-worker]", err.message);
   });

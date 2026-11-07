@@ -1,0 +1,4 @@
+---
+alwaysApply: true
+---
+Use Vue 3 Options API for all components.

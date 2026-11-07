@@ -1,0 +1,37 @@
+{
+  "jiraKey": "QUT",
+  "kind": "automation",
+  "linkedProfile": "MF",
+  "enabled": true,
+  "eligibleJql": "project = QUT AND assignee = currentUser() AND status in (\"To Do\",\"Script Prep\",\"Reopened\",\"Ready for Assign\")",
+  "transitions": {
+    "claim": "Script In progress",
+    "review": "READY FOR REVIEW",
+    "blocked": "On Hold"
+  },
+  "repo": {
+    "location": "D:/Projects/vxc-ui-automation",
+    "defaultBranch": "main",
+    "github": { "owner": "Vxceed-IN", "repo": "vxc-ui-automation" },
+    "credentialRef": "GITHUB_TOKEN",
+    "credentialFiles": [".env", "playwright/.auth"],
+    "installCommand": ["npm", "ci"],
+    "appCommand": [],
+    "readiness": "",
+    "testCommand": ["node", "scripts/playwright-test.js"],
+    "moduleRoot": "tests/e2e",
+    "gates": [["npm", "run", "lint"], ["npm", "run", "type-check"], ["npm", "run", "validate:test"]]
+  },
+  "rules": {
+    "forceInclude": [".cursor/rules/test-automation-rule.mdc"],
+    "extraDocs": ["docs/TEST_CASE_WRITING_STANDARDS.md", "README_VALIDATION.md"]
+  },
+  "moduleMap": {
+    "rules": [],
+    "autoKebabFromViews": false,
+    "sharedPaths": [],
+    "sharedFallback": []
+  },
+  "agent": { "model": "composer-2.5", "maxFixAttempts": 3 },
+  "approvalExpiryHours": 24
+}

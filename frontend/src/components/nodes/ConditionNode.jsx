@@ -14,7 +14,12 @@ function ConditionNode({ data, selected }) {
       <div className="canvas-node-url" title={field}>
         {field || 'truthy'}
       </div>
-      <Handle type="source" position={Position.Bottom} id="out" isConnectable className="handle-out" />
+      <div className="approval-handles">
+        <span>True</span>
+        <span>False</span>
+      </div>
+      <Handle type="source" position={Position.Bottom} id="true" isConnectable className="handle-out handle-true" />
+      <Handle type="source" position={Position.Bottom} id="false" isConnectable className="handle-out handle-false" />
     </div>
   )
 }

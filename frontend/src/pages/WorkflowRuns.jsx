@@ -1,13 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { workflowApi } from '../lib/api'
-
-function statusClass(status) {
-  if (status === 'success') return 'ok'
-  if (status === 'failed') return 'danger'
-  if (status === 'waiting') return 'wait'
-  return 'muted'
-}
+import { displayRunStatus } from '../lib/runLogDisplay'
 
 export default function WorkflowRuns() {
   const { id } = useParams()
@@ -87,7 +81,7 @@ export default function WorkflowRuns() {
             {runs.map((r) => (
               <li key={r._id}>
                 <Link to={`/workflows/${id}/runs/${r._id}`} className="run-row">
-                  <span className={`badge badge-${statusClass(r.status)}`}>{r.status}</span>
+                  <span className={`badge badge-${displayRunStatus(r).className}`}>{displayRunStatus(r).label}</span>
                   <span className="run-meta">
                     {r.jobId ? `job ${r.jobId}` : ''} ·{' '}
                     {r.startedAt ? new Date(r.startedAt).toLocaleString() : '—'}

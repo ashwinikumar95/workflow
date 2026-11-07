@@ -148,6 +148,7 @@ function redactRunForResponse(run) {
     }
   }
   if ("external" in plain) out.external = redactValue(plain.external);
+  if ("notifications" in plain) out.notifications = redactValue(plain.notifications);
   return out;
 }
 
@@ -182,6 +183,19 @@ function omittedSecret(value) {
   return value === undefined || value === null || value === "";
 }
 
+const TRIGGER_IDENTITY = ["seedKey", "intake", "profileKeys"];
+
+function keepTriggerIdentity(next, previous) {
+  if (!previous || !previous.trigger || !previous.trigger.config) return;
+  if (!next.trigger || !next.trigger.config || typeof next.trigger.config !== "object") return;
+  for (const key of TRIGGER_IDENTITY) {
+    if (next.trigger.config[key] != null) continue;
+    const kept = previous.trigger.config[key];
+    if (kept == null) continue;
+    next.trigger.config[key] = Array.isArray(kept) ? kept.slice() : kept;
+  }
+}
+
 function stripSecretSet(value) {
   if (Array.isArray(value)) {
     value.forEach(stripSecretSet);
@@ -213,6 +227,8 @@ function prepareWorkflowWrite(incoming, stored) {
   ) {
     next.trigger.config.secret = previous.trigger.config.secret;
   }
+
+  keepTriggerIdentity(next, previous);
 
   if (previous && Array.isArray(next.nodes) && Array.isArray(previous.nodes)) {
     const byId = new Map(previous.nodes.filter((node) => node && node.id).map((node) => [node.id, node]));

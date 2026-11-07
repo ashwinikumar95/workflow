@@ -1,0 +1,4 @@
+---
+alwaysApply: true
+---
+Sanitize inputs. Do not use v-html with untrusted data. Never hardcode secrets.

@@ -1,0 +1,22 @@
+---
+description: vxceedGrid implementation standards for Mt-Fuji-Central
+globs: "**/*.{vue,js,ts}"
+alwaysApply: false
+---
+
+# vxceed Grid Rules
+
+Use `vxceedGrid` for list screens. There is no `vxceed-form-grid` in this repo. Syncfusion `ejs-grid` is not available.
+
+## List grid
+
+Pair the grid with `vxceedColumnChooser` when the screen already manages column visibility. Keep Options API handlers consistent with sibling screens (`handleGridAction`, page-change, row click).
+
+Define columns in script. Use Vue `h()` render functions for custom cells. Do not add `<e-column>` or `<ejs-grid>` tags.
+
+## Do / Don't
+
+- **Do** keep paging on for large lists.
+- **Do** put heavy data transforms in methods/computed, not inside cell templates.
+- **Don't** import `@syncfusion/ej2-vue-grids`.
+- **Don't** treat `mfc-ejs-grid` as a Syncfusion component; it is a CSS class on the native grid wrapper.
