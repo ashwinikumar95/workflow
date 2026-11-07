@@ -61,11 +61,10 @@ function jiraStop(id, extra) {
     id,
     type: "jiraUpdate",
     config: {
-      title: "Jira blocked",
-      transition: "blocked",
+      title: "Jira comment",
       retries: 1,
       ticketStage: "blocked",
-      action: "blocked",
+      action: "comment",
       comment: "{{reason}}",
       ...extra,
     },
@@ -144,18 +143,11 @@ function addCommonStops(nodes, edges, spec) {
     edges,
     spec.stops.rejected,
     notify("notifyPlanRejected", "plan_rejected", "Stopped: you rejected the plan", "awaiting_approval"),
-    {
-      id: "jiraPlanRejected",
-      type: "jiraUpdate",
-      config: {
-        title: "Jira rejected",
-        transition: "blocked",
-        retries: 1,
-        ticketStage: "rejected",
-        action: "blocked",
-        comment: "Plan rejected",
-      },
-    },
+    jiraStop("jiraPlanRejected", {
+      title: "Jira rejected",
+      ticketStage: "rejected",
+      comment: "Plan rejected",
+    }),
     1,
     6
   );

@@ -2,15 +2,15 @@ const TicketRun = require("../models/TicketRun");
 const { TERMINAL_STATES } = TicketRun;
 
 const ALLOWED = {
-  claimed: ["planning", "skipped", "cancelled"],
+  claimed: ["planning", "skipped", "cancelled", "failed"],
   planning: ["awaiting_approval", "blocked", "interrupted", "failed", "cancelled"],
-  awaiting_approval: ["rejected", "expired", "queued", "cancelled"],
-  queued: ["implementing", "planning", "cancelled"],
-  implementing: ["verifying", "blocked", "interrupted", "cancelled"],
-  verifying: ["implementing", "pr_open", "blocked", "interrupted", "cancelled"],
-  pr_open: ["completed", "blocked", "interrupted", "cancelled"],
-  interrupted: ["planning", "implementing", "verifying", "cancelled"],
-  expired: ["planning", "cancelled"],
+  awaiting_approval: ["rejected", "expired", "queued", "cancelled", "failed"],
+  queued: ["implementing", "planning", "cancelled", "failed"],
+  implementing: ["verifying", "blocked", "interrupted", "cancelled", "failed"],
+  verifying: ["implementing", "pr_open", "blocked", "interrupted", "cancelled", "failed"],
+  pr_open: ["completed", "blocked", "interrupted", "cancelled", "failed"],
+  interrupted: ["planning", "implementing", "verifying", "cancelled", "failed"],
+  expired: ["planning", "cancelled", "failed"],
 };
 
 function isTerminal(state) {
@@ -47,6 +47,19 @@ async function createLive(doc) {
   }
 }
 
+async function markEnded(runId, to, patch = {}) {
+  const dest = to === "cancelled" ? "cancelled" : "failed";
+  const ticket = await TicketRun.findOne({ runId: String(runId) });
+  if (!ticket || isTerminal(ticket.state)) return { ok: true, skipped: true, ticket };
+  if (isAllowed(ticket.state, dest)) {
+    return transition(ticket._id, ticket.state, dest, patch);
+  }
+  if (dest !== "cancelled" && isAllowed(ticket.state, "cancelled")) {
+    return transition(ticket._id, ticket.state, "cancelled", patch);
+  }
+  return { ok: false, reason: "invalid_transition", from: ticket.state, to: dest };
+}
+
 async function transition(id, from, to, patch = {}) {
   if (!isAllowed(from, to)) {
     console.error(`[ticketState] refused ${from} -> ${to}`);
@@ -73,4 +86,5 @@ module.exports = {
   listedTransitions,
   createLive,
   transition,
+  markEnded,
 };

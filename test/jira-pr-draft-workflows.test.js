@@ -5,9 +5,11 @@ const mongoose = require("mongoose");
 const Workflow = require("../src/models/workflow");
 const User = require("../src/models/User");
 const TicketRun = require("../src/models/TicketRun");
+const Run = require("../src/models/Run");
 const ResourceLock = require("../src/models/ResourceLock");
 const dispatcher = require("../src/services/jiraDispatcher");
 const { seedDraftWorkflows, loadSeedDefs } = require("../src/services/workflowSeed");
+const { prepareWorkflowWrite } = require("../src/utils/redactSecrets");
 const rulesService = require("../src/services/rulesService");
 const lifecycle = require("../src/nodes/lifecycle");
 const { parseProfiles } = require("../src/services/projectRegistry");
@@ -154,6 +156,102 @@ describe("jira-pr durable MF/MFC drafts", () => {
     assert.equal(kept.status, "published");
   });
 
+  test("seed restores intake fields wiped from a published manual workflow", async () => {
+    const user = await makeOwner();
+    await seedDraftWorkflows();
+    const manual = await Workflow.findOne({ "trigger.config.seedKey": "manual-mf-mfc" });
+    await Workflow.updateOne(
+      { _id: manual._id },
+      { $set: { status: "published", "trigger.config": { provider: "jira" } } }
+    );
+
+    const second = await seedDraftWorkflows();
+    assert.equal(second.created.length, 0);
+    assert.equal(second.repaired.length, 1);
+    assert.equal(second.repaired[0].seedKey, "manual-mf-mfc");
+
+    const stored = await Workflow.findById(manual._id).lean();
+    assert.equal(stored.status, "published");
+    assert.equal(stored.trigger.config.provider, "jira");
+    assert.equal(stored.trigger.config.seedKey, "manual-mf-mfc");
+    assert.equal(stored.trigger.config.intake, "manual");
+    assert.deepEqual(stored.trigger.config.profileKeys, ["MF", "MFC"]);
+    assert.equal(
+      await Workflow.countDocuments({ userId: user._id, name: "Manual MF or MFC ticket" }),
+      1
+    );
+
+    const fake = createFakeJira({ "MFC-40": issuePayload("MFC-40") });
+    const started = await dispatcher.startFromIssue("MFC-40", depsFor(fake));
+    assert.equal(started.profileKey, "MFC");
+    assert.equal(String(started.workflowId), String(manual._id));
+  });
+
+  test("seed repairs the published workflow and drops the duplicate draft", async () => {
+    const user = await makeOwner();
+    await seedDraftWorkflows();
+    const manual = await Workflow.findOne({ "trigger.config.seedKey": "manual-mf-mfc" });
+    await Workflow.updateOne(
+      { _id: manual._id },
+      { $set: { status: "published", "trigger.config": { provider: "jira" } } }
+    );
+    const duplicate = await Workflow.create({
+      name: "Manual MF or MFC ticket",
+      status: "draft",
+      userId: user._id,
+      trigger: {
+        type: "webhook",
+        enabled: true,
+        config: {
+          provider: "jira",
+          seedKey: "manual-mf-mfc",
+          intake: "manual",
+          profileKeys: ["MF", "MFC"],
+        },
+      },
+      nodes: [],
+      edges: [],
+    });
+
+    const second = await seedDraftWorkflows();
+    assert.equal(second.created.length, 0);
+    assert.equal(second.repaired.length, 1);
+    assert.equal(second.repaired[0].id, String(manual._id));
+    const stored = await Workflow.findById(manual._id).lean();
+    assert.equal(stored.status, "published");
+    assert.equal(stored.trigger.config.intake, "manual");
+    assert.deepEqual(stored.trigger.config.profileKeys, ["MF", "MFC"]);
+    assert.equal(await Workflow.countDocuments({ _id: duplicate._id }), 0);
+    assert.equal(
+      await Workflow.countDocuments({ userId: user._id, name: "Manual MF or MFC ticket" }),
+      1
+    );
+  });
+
+  test("saving a trigger keeps seed intake fields the editor does not send", () => {
+    const next = prepareWorkflowWrite(
+      { trigger: { type: "webhook", enabled: true, config: { provider: "jira" } } },
+      {
+        trigger: {
+          type: "webhook",
+          enabled: true,
+          config: {
+            provider: "jira",
+            seedKey: "manual-mf-mfc",
+            intake: "manual",
+            profileKeys: ["MF", "MFC"],
+            secret: "keep-me",
+          },
+        },
+      }
+    );
+    assert.equal(next.trigger.config.provider, "jira");
+    assert.equal(next.trigger.config.seedKey, "manual-mf-mfc");
+    assert.equal(next.trigger.config.intake, "manual");
+    assert.deepEqual(next.trigger.config.profileKeys, ["MF", "MFC"]);
+    assert.equal(next.trigger.config.secret, undefined);
+  });
+
   test("seed skips when the owner user is missing", async () => {
     const result = await seedDraftWorkflows();
     assert.equal(result.skipped, true);
@@ -191,6 +289,40 @@ describe("jira-pr durable MF/MFC drafts", () => {
     const started = await dispatcher.startFromIssue("MFC-40", depsFor(fake));
     assert.equal(started.profileKey, "MFC");
     assert.equal(String(started.workflowId), String(manual._id));
+  });
+
+  test("paste can start the same ticket again after the previous run is cancelled", async () => {
+    const user = await makeOwner();
+    await seedDraftWorkflows();
+    await Workflow.updateOne(
+      { userId: user._id, "trigger.config.seedKey": "manual-mf-mfc" },
+      { $set: { status: "published" } }
+    );
+    const fake = createFakeJira({ "MFC-40": issuePayload("MFC-40") });
+    const first = await dispatcher.startFromIssue("MFC-40", depsFor(fake));
+    await assert.rejects(
+      () => dispatcher.startFromIssue("MFC-40", depsFor(fake)),
+      (err) => err.statusCode === 409 && err.reason === "duplicate"
+    );
+    await TicketRun.updateOne({ runId: first.runId }, { $set: { state: "cancelled" } });
+    const second = await dispatcher.startFromIssue("MFC-40", depsFor(fake));
+    assert.equal(second.ok, true);
+    assert.notEqual(second.runId, first.runId);
+  });
+
+  test("paste starts a new run when the previous run already failed", async () => {
+    const user = await makeOwner();
+    await seedDraftWorkflows();
+    await Workflow.updateOne(
+      { userId: user._id, "trigger.config.seedKey": "manual-mf-mfc" },
+      { $set: { status: "published" } }
+    );
+    const fake = createFakeJira({ "MFC-40": issuePayload("MFC-40") });
+    const first = await dispatcher.startFromIssue("MFC-40", depsFor(fake));
+    await Run.updateOne({ _id: first.runId }, { $set: { status: "failed" } });
+    const second = await dispatcher.startFromIssue("MFC-40", depsFor(fake));
+    assert.equal(second.ok, true);
+    assert.notEqual(second.runId, first.runId);
   });
 
   test("bucket poll for MF/MFC waits until that bucket workflow is published", async () => {

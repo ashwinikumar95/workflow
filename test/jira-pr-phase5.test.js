@@ -6,6 +6,7 @@ const Run = require("../src/models/Run");
 const TicketRun = require("../src/models/TicketRun");
 const ResourceLock = require("../src/models/ResourceLock");
 const jira = require("../src/services/jiraService");
+const jiraTransition = require("../src/services/jiraTransition");
 const dispatcher = require("../src/services/jiraDispatcher");
 const lifecycle = require("../src/nodes/lifecycle");
 const engine = require("../src/services/executionengine");
@@ -24,14 +25,16 @@ function issuePayload(key, extra = {}) {
   const description = Object.prototype.hasOwnProperty.call(extra, "description")
     ? extra.description
     : "Acceptance: user can complete the flow.";
+  const prefix = String(key).replace(/-\d+$/, "");
   return {
     id: extra.id || String(10000 + Number(String(key).replace(/\D/g, "") || 1)),
     key,
     fields: {
       summary: extra.summary ?? `Work ${key}`,
       description,
-      status: { name: extra.status || "To Do" },
-      issuetype: { name: extra.issueType || "Story" },
+      status: { name: extra.status || "To Do", id: extra.statusId || "1" },
+      issuetype: extra.issuetype || { id: extra.issueTypeId || "10001", name: extra.issueType || "Story" },
+      project: extra.project || { id: extra.projectId || `p-${prefix}`, key: prefix },
       labels: extra.labels || [],
       components: extra.components || [{ name: "UI" }],
       updated: extra.updated || "2026-11-06T00:00:00.000Z",
@@ -52,9 +55,12 @@ function rateLimit(retryAfter = "0") {
 function createFakeJira(seed = {}) {
   const issues = { ...(seed.issues || {}) };
   const comments = {};
+  const extraFields = {};
   const transitionPosts = [];
   const commentPosts = [];
+  const fieldPuts = [];
   const searchCalls = [];
+  const failedOnce = {};
   let pages = Array.isArray(seed.searchPages) ? [...seed.searchPages] : null;
   let remaining429 = Number(seed.rateLimits) || 0;
   const slept = [];
@@ -71,15 +77,100 @@ function createFakeJira(seed = {}) {
     return match ? decodeURIComponent(match[1]) : "";
   }
 
+  function toNameOf(item) {
+    if (!item) return "";
+    if (typeof item.to === "string") return item.to;
+    return item.to && item.to.name ? item.to.name : "";
+  }
+
+  function enrich(item) {
+    const toName = toNameOf(item);
+    const fields =
+      (item && item.fields) ||
+      (seed.requiredFieldsByTo && seed.requiredFieldsByTo[toName]) ||
+      {};
+    return {
+      ...item,
+      to: typeof item.to === "string" ? { name: item.to } : item.to,
+      fields,
+    };
+  }
+
+  function currentStatus(key) {
+    return issues[key] && issues[key].fields && issues[key].fields.status
+      ? issues[key].fields.status.name
+      : "";
+  }
+
+  function fieldSet(key) {
+    return extraFields[key] || {};
+  }
+
+  function offeredFor(key) {
+    let list = [];
+    if (seed.transitionsByStatus) {
+      list = seed.transitionsByStatus[currentStatus(key)] || [];
+    } else if (seed.transitions && seed.transitions[key]) {
+      list = seed.transitions[key];
+    }
+    return list
+      .filter((item) => {
+        const toName = toNameOf(item);
+        const need = seed.offerAfterFields && seed.offerAfterFields[toName];
+        if (!need || !need.length) return true;
+        const stored = fieldSet(key);
+        return need.every((name) => stored[name] != null);
+      })
+      .map(enrich);
+  }
+
+  function workflowResponse() {
+    const graph = seed.workflows;
+    if (!graph) return { workflows: [], statuses: [] };
+    return {
+      statuses: graph.statuses || [],
+      workflows: [
+        {
+          statuses: graph.statuses || [],
+          transitions: (graph.transitions || []).map((item) => ({
+            id: item.id,
+            name: item.name,
+            type: "DIRECTED",
+            from: item.from,
+            to: typeof item.to === "string" ? { name: item.to } : item.to,
+          })),
+        },
+      ],
+    };
+  }
+
+  function httpError(status, data) {
+    const err = new Error(`http ${status}`);
+    err.response = { status, data: data || {} };
+    return err;
+  }
+
   const http = {
     async get(url) {
       maybe429();
-      const key = issueFromUrl(url);
-      if (String(url).includes("/transitions")) {
-        const offered = seed.transitions && seed.transitions[key] ? seed.transitions[key] : [];
-        return { data: { transitions: offered } };
+      const path = String(url);
+      if (path.includes("/myself")) {
+        return { data: seed.myself || { accountId: "acc-1", emailAddress: "bot@example.test" } };
       }
-      if (String(url).includes("/comment")) {
+      if (path.includes("/workflow/search")) {
+        return { data: { values: workflowResponse().workflows, statuses: workflowResponse().statuses } };
+      }
+      if (path.includes("/workflowscheme")) {
+        throw httpError(404);
+      }
+      const key = issueFromUrl(url);
+      if (path.includes("/transitions")) {
+        return { data: { transitions: offeredFor(key) } };
+      }
+      if (path.includes("/editmeta")) {
+        return { data: { fields: seed.editmeta || {} } };
+      }
+      if (path.includes("/comment")) {
         const list = comments[key] || [];
         return {
           data: {
@@ -91,16 +182,13 @@ function createFakeJira(seed = {}) {
         };
       }
       const raw = issues[key];
-      if (!raw) {
-        const err = new Error("not found");
-        err.response = { status: 404 };
-        throw err;
-      }
+      if (!raw) throw httpError(404);
       return { data: raw };
     },
     async post(url, body) {
       maybe429();
-      if (String(url).includes("/search/jql")) {
+      const path = String(url);
+      if (path.includes("/search/jql")) {
         searchCalls.push(body);
         if (pages && pages.length) return { data: pages.shift() };
         const project = String(body && body.jql).match(/project\s*=\s*([A-Z]+)/i);
@@ -108,18 +196,47 @@ function createFakeJira(seed = {}) {
         const list = Object.values(issues).filter((item) => prefixOf(item.key) === want);
         return { data: { issues: list, isLast: true } };
       }
+      if (path.includes("/workflows") && !path.includes("/issue/")) {
+        return { data: workflowResponse() };
+      }
       const key = issueFromUrl(url);
-      if (String(url).includes("/transitions")) {
-        transitionPosts.push({ key, body });
+      if (path.includes("/transitions")) {
         const id = body && body.transition && body.transition.id;
-        const offered = seed.transitions && seed.transitions[key] ? seed.transitions[key] : [];
+        const offered = offeredFor(key);
         const match = offered.find((item) => String(item.id) === String(id));
+        const dest = toNameOf(match);
+        const fail = seed.failTransitionOnce && dest && seed.failTransitionOnce[dest];
+        if (fail && !failedOnce[`${key}:${dest}`]) {
+          failedOnce[`${key}:${dest}`] = true;
+          throw httpError(400, { errors: fail.errors || fail });
+        }
+        if (seed.enforceRequiredOnPost && match && match.fields) {
+          const sent = (body && body.fields) || {};
+          for (const [name, meta] of Object.entries(match.fields)) {
+            if (meta && meta.required && sent[name] == null && name !== "comment") {
+              throw httpError(400, { errors: { [name]: `${name} is required.` } });
+            }
+          }
+        }
+        transitionPosts.push({ key, body });
         if (match && match.to && issues[key] && issues[key].fields) {
-          issues[key].fields.status = { name: match.to.name };
+          issues[key].fields.status = {
+            name: match.to.name,
+            id: match.to.id || issues[key].fields.status.id,
+          };
+        }
+        if (body && body.update && body.update.comment) {
+          const added = body.update.comment[0] && body.update.comment[0].add && body.update.comment[0].add.body;
+          const text = jira.adfToText(added);
+          if (text) {
+            comments[key] = comments[key] || [];
+            comments[key].push(text);
+            commentPosts.push({ key, text });
+          }
         }
         return { data: {} };
       }
-      if (String(url).includes("/comment")) {
+      if (path.includes("/comment")) {
         const text = jira.adfToText(body && body.body);
         comments[key] = comments[key] || [];
         comments[key].push(text);
@@ -128,14 +245,26 @@ function createFakeJira(seed = {}) {
       }
       throw new Error(`unexpected POST ${url}`);
     },
+    async put(url, body) {
+      maybe429();
+      const key = issueFromUrl(url);
+      if (!issues[key]) throw httpError(404);
+      const fields = (body && body.fields) || {};
+      extraFields[key] = { ...(extraFields[key] || {}), ...fields };
+      if (issues[key].fields) Object.assign(issues[key].fields, fields);
+      fieldPuts.push({ key, fields });
+      return { data: {} };
+    },
   };
 
   return {
     http,
     issues,
     comments,
+    extraFields,
     transitionPosts,
     commentPosts,
+    fieldPuts,
     searchCalls,
     slept,
     sleep: async (ms) => {
@@ -194,6 +323,7 @@ describe("jira-pr phase 5 intake", () => {
   beforeEach(async () => {
     await clearTestData();
     enqueued = [];
+    jira.clearWorkflowCache();
   });
 
   function enqueue(workflowId, input, options) {
@@ -512,5 +642,371 @@ describe("jira-pr phase 5 intake", () => {
       dispatcher.assessEligibility(issue, profiles.TAC, { source: "bucket" }).ok,
       true
     );
+  });
+
+  test("On Hold walks Ready for Assign through DEV IN PROGRESS", async () => {
+    const fake = createFakeJira({
+      issues: { "MFC-10142": issuePayload("MFC-10142", { status: "Ready for Assign" }) },
+      transitionsByStatus: mfcOffered(),
+      workflows: mfcWorkflowGraph(),
+    });
+    const result = await jira.transitionIssue("MFC-10142", "On Hold", {
+      http: fake.http,
+      sleep: fake.sleep,
+      marker: "[wf:run1:jiraPlanFailed]",
+      preferredStatuses: ["In Progress", "READY FOR REVIEW", "On Hold"],
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.reason, "transitioned");
+    assert.deepEqual(
+      result.hops.map((hop) => hop.to),
+      ["DEV IN PROGRESS", "On Hold"]
+    );
+    assert.equal(fake.transitionPosts.length, 2);
+    assert.equal(fake.commentPosts.length, 0);
+    assert.equal(fake.issues["MFC-10142"].fields.status.name, "On Hold");
+  });
+
+  test("required transition fields are sent on the On Hold hop", async () => {
+    const fake = createFakeJira({
+      issues: { "MFC-10142": issuePayload("MFC-10142", { status: "Ready for Assign" }) },
+      transitionsByStatus: mfcOffered(),
+      workflows: mfcWorkflowGraph(),
+      enforceRequiredOnPost: true,
+      requiredFieldsByTo: {
+        "On Hold": {
+          resolution: {
+            required: true,
+            schema: { type: "resolution" },
+            allowedValues: [
+              { id: "10000", name: "Done" },
+              { id: "10001", name: "Won't Do" },
+            ],
+          },
+        },
+      },
+    });
+    const result = await jira.transitionIssue("MFC-10142", "On Hold", {
+      http: fake.http,
+      sleep: fake.sleep,
+      commentText: "Plan did not stay clean",
+    });
+    assert.equal(result.ok, true);
+    const hold = fake.transitionPosts.find((row) => row.body.transition.id === "20");
+    assert.ok(hold);
+    assert.equal(hold.body.fields.resolution.id, "10001");
+  });
+
+  test("a required field is PUT before a hidden hop is offered", async () => {
+    const fake = createFakeJira({
+      issues: { "MFC-7": issuePayload("MFC-7", { status: "Ready for Assign" }) },
+      transitionsByStatus: {
+        "Ready for Assign": [{ id: "20", name: "On Hold", to: { name: "On Hold" } }],
+        "On Hold": [],
+      },
+      workflows: {
+        statuses: [
+          { id: "1", name: "Ready for Assign" },
+          { id: "4", name: "On Hold" },
+        ],
+        transitions: [{ id: "20", name: "On Hold", from: ["Ready for Assign"], to: "On Hold" }],
+      },
+      offerAfterFields: { "On Hold": ["customfield_11800"] },
+      editmeta: {
+        customfield_11800: { required: false, schema: { type: "string" } },
+      },
+    });
+    const result = await jira.transitionIssue("MFC-7", "On Hold", {
+      http: fake.http,
+      sleep: fake.sleep,
+      transitionFields: { customfield_11800: "Blocked: plan failed" },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(fake.fieldPuts.length, 1);
+    assert.equal(fake.fieldPuts[0].fields.customfield_11800, "Blocked: plan failed");
+    assert.equal(fake.transitionPosts.length, 1);
+    assert.equal(fake.issues["MFC-7"].fields.status.name, "On Hold");
+  });
+
+  test("claim target In Progress matches live status DEV IN PROGRESS", async () => {
+    const fake = createFakeJira({
+      issues: { "MFC-8": issuePayload("MFC-8", { status: "Ready for Assign" }) },
+      transitionsByStatus: mfcOffered(),
+      workflows: mfcWorkflowGraph(),
+    });
+    const result = await jira.transitionIssue("MFC-8", "In Progress", {
+      http: fake.http,
+      sleep: fake.sleep,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.hops.length, 1);
+    assert.equal(result.hops[0].to, "DEV IN PROGRESS");
+    assert.equal(fake.issues["MFC-8"].fields.status.name, "DEV IN PROGRESS");
+  });
+
+  test("a transition that still cannot be reached comments offered hops", async () => {
+    const fake = createFakeJira({
+      issues: { "MF-13": issuePayload("MF-13") },
+      transitions: { "MF-13": [{ id: "21", name: "Start", to: { name: "In Progress" } }] },
+    });
+    const result = await jira.transitionIssue("MF-13", "READY FOR REVIEW", {
+      http: fake.http,
+      sleep: fake.sleep,
+      marker: "[wf:run1:n1]",
+      commentOnMissing: true,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "not_offered");
+    assert.match(fake.commentPosts[0].text, /Offered: Start → In Progress/);
+  });
+
+  test("a 400 listing missing fields retries the hop once", async () => {
+    const fake = createFakeJira({
+      issues: { "MFC-12": issuePayload("MFC-12", { status: "DEV IN PROGRESS" }) },
+      transitionsByStatus: mfcOffered(),
+      workflows: mfcWorkflowGraph(),
+      failTransitionOnce: {
+        "On Hold": { errors: { customfield_9: "required" } },
+      },
+    });
+    const result = await jira.transitionIssue("MFC-12", "On Hold", {
+      http: fake.http,
+      sleep: fake.sleep,
+      commentText: "hold reason",
+    });
+    assert.equal(result.ok, true);
+    assert.equal(fake.transitionPosts.length, 1);
+    assert.equal(fake.transitionPosts[0].body.fields.customfield_9, "hold reason");
+  });
+
+  test("a looped workflow does not walk forever", async () => {
+    const fake = createFakeJira({
+      issues: { "MFC-9": issuePayload("MFC-9", { status: "A" }) },
+      transitionsByStatus: {
+        A: [{ id: "1", name: "to B", to: { name: "B" } }],
+        B: [{ id: "2", name: "to A", to: { name: "A" } }],
+      },
+      workflows: {
+        statuses: [
+          { id: "1", name: "A" },
+          { id: "2", name: "B" },
+          { id: "3", name: "C" },
+        ],
+        transitions: [
+          { id: "1", name: "to B", from: ["A"], to: "B" },
+          { id: "2", name: "to A", from: ["B"], to: "A" },
+        ],
+      },
+    });
+    const result = await jira.transitionIssue("MFC-9", "C", {
+      http: fake.http,
+      sleep: fake.sleep,
+      marker: "[wf:loop:n1]",
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "not_offered");
+    assert.equal(fake.transitionPosts.length, 0);
+  });
+
+  test("a path longer than six hops is refused", async () => {
+    const statuses = ["S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7"];
+    const transitions = [];
+    const byStatus = {};
+    for (let i = 0; i < statuses.length - 1; i += 1) {
+      const id = String(i + 1);
+      transitions.push({ id, name: `to ${statuses[i + 1]}`, from: [statuses[i]], to: statuses[i + 1] });
+      byStatus[statuses[i]] = [{ id, name: `to ${statuses[i + 1]}`, to: { name: statuses[i + 1] } }];
+    }
+    byStatus.S7 = [];
+    const fake = createFakeJira({
+      issues: { "MFC-10": issuePayload("MFC-10", { status: "S0" }) },
+      transitionsByStatus: byStatus,
+      workflows: {
+        statuses: statuses.map((name, idx) => ({ id: String(idx + 1), name })),
+        transitions,
+      },
+    });
+    const result = await jira.transitionIssue("MFC-10", "S7", {
+      http: fake.http,
+      sleep: fake.sleep,
+      marker: "[wf:cap:n1]",
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "not_offered");
+    assert.equal(fake.transitionPosts.length, 0);
+  });
+
+  test("jiraUpdate passes comment text into a blocked transition", async () => {
+    const fake = createFakeJira({
+      issues: { "MFC-11": issuePayload("MFC-11", { status: "DEV IN PROGRESS" }) },
+      transitionsByStatus: mfcOffered(),
+      workflows: mfcWorkflowGraph(),
+      requiredFieldsByTo: {
+        "On Hold": {
+          comment: { required: true, schema: { type: "string" } },
+        },
+      },
+    });
+    const originalTransition = jira.transitionIssue;
+    const originalComment = jira.addComment;
+    jira.transitionIssue = (key, status, extra = {}) =>
+      originalTransition(key, status, { ...extra, http: fake.http, sleep: fake.sleep });
+    jira.addComment = (key, text, marker, extra = {}) =>
+      originalComment(key, text, marker, { ...extra, http: fake.http, sleep: fake.sleep });
+    try {
+      const node = {
+        id: "jiraPlanFailed",
+        type: "jiraUpdate",
+        config: {
+          transition: "blocked",
+          comment: "{{reason}}",
+        },
+      };
+      const input = {
+        issueKey: "MFC-11",
+        jira: { key: "MFC-11" },
+        reason: "plan did not stay clean",
+      };
+      const runState = { runId: "bbbbbbbbbbbbbbbbbbbbbbbb", nodeId: "jiraPlanFailed" };
+      const out = await lifecycle.jiraUpdate(node, input, runState);
+      assert.equal(out.jiraUpdate.transition.ok, true);
+      assert.equal(fake.transitionPosts.length, 1);
+      assert.ok(fake.transitionPosts[0].body.update);
+    } finally {
+      jira.transitionIssue = originalTransition;
+      jira.addComment = originalComment;
+    }
+  });
+
+  test("jiraUpdate comments without transitioning when no status is configured", async () => {
+    const fake = createFakeJira({
+      issues: { "MFC-11": issuePayload("MFC-11", { status: "DEV IN PROGRESS" }) },
+      transitionsByStatus: mfcOffered(),
+      workflows: mfcWorkflowGraph(),
+    });
+    const originalTransition = jira.transitionIssue;
+    const originalComment = jira.addComment;
+    let transitionCalls = 0;
+    jira.transitionIssue = (...args) => {
+      transitionCalls += 1;
+      return originalTransition(...args);
+    };
+    jira.addComment = (key, text, marker, extra = {}) =>
+      originalComment(key, text, marker, { ...extra, http: fake.http, sleep: fake.sleep });
+    try {
+      const node = {
+        id: "jiraPlanFailed",
+        type: "jiraUpdate",
+        config: { comment: "{{reason}}" },
+      };
+      const input = {
+        issueKey: "MFC-11",
+        jira: { key: "MFC-11" },
+        reason: "plan did not stay clean",
+      };
+      const runState = { runId: "bbbbbbbbbbbbbbbbbbbbbbbb", nodeId: "jiraPlanFailed" };
+      const out = await lifecycle.jiraUpdate(node, input, runState);
+      assert.equal(out.jiraUpdate.transition, undefined);
+      assert.equal(transitionCalls, 0);
+      assert.equal(fake.transitionPosts.length, 0);
+      assert.equal(fake.commentPosts.length, 1);
+      assert.match(fake.commentPosts[0].text, /plan did not stay clean/);
+      assert.equal(fake.issues["MFC-11"].fields.status.name, "DEV IN PROGRESS");
+    } finally {
+      jira.transitionIssue = originalTransition;
+      jira.addComment = originalComment;
+    }
+  });
+});
+
+function mfcWorkflowGraph() {
+  return {
+    statuses: [
+      { id: "1", name: "Ready for Assign" },
+      { id: "2", name: "DEV IN PROGRESS" },
+      { id: "3", name: "READY FOR DESIGN" },
+      { id: "4", name: "On Hold" },
+      { id: "5", name: "READY FOR REVIEW" },
+    ],
+    transitions: [
+      { id: "10", name: "Start Dev", from: ["Ready for Assign"], to: "DEV IN PROGRESS" },
+      { id: "11", name: "More Details", from: ["Ready for Assign"], to: "READY FOR DESIGN" },
+      { id: "20", name: "On Hold", from: ["DEV IN PROGRESS"], to: "On Hold" },
+      { id: "21", name: "Ready for Review", from: ["DEV IN PROGRESS"], to: "READY FOR REVIEW" },
+      { id: "30", name: "Start Dev", from: ["READY FOR DESIGN"], to: "DEV IN PROGRESS" },
+    ],
+  };
+}
+
+function mfcOffered() {
+  return {
+    "Ready for Assign": [
+      { id: "10", name: "Start Dev", to: { name: "DEV IN PROGRESS" } },
+      { id: "11", name: "More Details", to: { name: "READY FOR DESIGN" } },
+    ],
+    "DEV IN PROGRESS": [
+      { id: "20", name: "On Hold", to: { name: "On Hold" } },
+      { id: "21", name: "Ready for Review", to: { name: "READY FOR REVIEW" } },
+    ],
+    "READY FOR DESIGN": [{ id: "30", name: "Start Dev", to: { name: "DEV IN PROGRESS" } }],
+    "On Hold": [],
+  };
+}
+
+describe("jira transition path helpers", () => {
+  test("BFS prefers the claim status when two paths are the same length", () => {
+    const workflow = {
+      statuses: [
+        { name: "Ready for Assign" },
+        { name: "DEV IN PROGRESS" },
+        { name: "READY FOR DESIGN" },
+        { name: "On Hold" },
+      ],
+      transitions: [
+        { id: "1", name: "Start Dev", from: ["Ready for Assign"], to: "DEV IN PROGRESS" },
+        { id: "2", name: "More Details", from: ["Ready for Assign"], to: "READY FOR DESIGN" },
+        { id: "3", name: "Hold from dev", from: ["DEV IN PROGRESS"], to: "On Hold" },
+        { id: "4", name: "Hold from design", from: ["READY FOR DESIGN"], to: "On Hold" },
+      ],
+    };
+    const path = jiraTransition.findTransitionPath(workflow, "Ready for Assign", "On Hold", {
+      preferredStatuses: ["In Progress", "On Hold"],
+    });
+    assert.deepEqual(
+      path.map((hop) => hop.to),
+      ["DEV IN PROGRESS", "On Hold"]
+    );
+  });
+
+  test("fillRequiredFields uses overlay, then allowed values, then comment text", () => {
+    const filled = jiraTransition.fillRequiredFields(
+      {
+        resolution: {
+          required: true,
+          schema: { type: "resolution" },
+          allowedValues: [
+            { id: "1", name: "Done" },
+            { id: "2", name: "Won't Do" },
+          ],
+        },
+        customfield_1: { required: true, schema: { type: "string" } },
+        assignee: { required: true, schema: { type: "user" } },
+      },
+      {
+        commentText: "blocked by plan",
+        myself: { accountId: "acc-1" },
+      }
+    );
+    assert.equal(filled.missing.length, 0);
+    assert.equal(filled.fields.resolution.id, "2");
+    assert.equal(filled.fields.customfield_1, "blocked by plan");
+    assert.equal(filled.fields.assignee.accountId, "acc-1");
+  });
+
+  test("a required field with no justifiable value is reported missing", () => {
+    const filled = jiraTransition.fillRequiredFields({
+      duedate: { required: true, schema: { type: "date" } },
+    });
+    assert.deepEqual(filled.missing, ["duedate"]);
   });
 });

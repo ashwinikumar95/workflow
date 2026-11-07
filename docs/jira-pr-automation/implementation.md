@@ -432,7 +432,8 @@ MFC starts with `enabled: false`.
 ### Phase 11 notes
 
 - Draft Central rules live in `config/mfc-rules/` and were copied to `Mt-Fuji-Central/.cursor/rules/`. Open a PR on that repo so the agent loads them with `settingSources: ["project"]`. Fuji-Vue3 rules were used only where they match (Options API, native `vxceed*` components, no Syncfusion). `mfc-ejs-*` stays a CSS compatibility class, not an `ejs-*` tag.
-- `MFC.json` is `enabled: true`. Mechanical checks are in `config/rules-checks/Mt-Fuji-Central.json`.
+- `DEVELOPER_PROMPT.md` and `COMPOSITION_API_EXPLAINED.md` are force-included for every MFC ticket. They keep Central on Options API. `topicIncludes` adds the downstream frontend and review skills only for Global Identity / gateway login tickets (`USE_GLOBAL_AUTH`, token key `lhu.central.access_token`).
+- `MFC.json` is `enabled: true`. Mechanical checks are in `config/rules-checks/Mt-Fuji-Central.json`: no auth tokens in `localStorage`, no extra `sessionStorage` auth keys, no `src/lib/` or `src/composables/`, and no `import.meta.env.VITE_*` app config.
 - Retention is `src/services/retention.js`: artifacts plus both `WORKTREES_DIR` and `PLAYWRIGHT_WORKTREES_DIR`. The workflow worker runs it on the existing timer.
 - Jira search caps each profile poll (`JIRA_SEARCH_MAX_ISSUES`, default 200), pauses between pages, and keeps partial results when a later page is 429'd. A rate-limited profile does not stop the other three.
 - `recovery.cleanupLeftoverProcesses` kills recorded host PIDs for finished or claim-expired runs after a worker crash. Playwright/agent waits are left alone.

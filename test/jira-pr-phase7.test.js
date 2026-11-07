@@ -13,6 +13,7 @@ const rulesService = require("../src/services/rulesService");
 const rulesChecks = require("../src/services/rulesChecks");
 const { recordDecision, evaluateApproval } = require("../src/services/approvalService");
 const { buildPlanPrompt, START } = require("../src/services/cursorPromptService");
+const { readPlan, readResult } = require("../src/services/agentContract");
 const lifecycle = require("../src/nodes/lifecycle");
 const { decideRun } = require("../src/controllers/RunController");
 const {
@@ -549,6 +550,80 @@ describe("jira-pr phase 7 rules, plan mode and approval", () => {
     assert.ok(text.indexOf("TRUSTED RULES") < start);
     assert.ok(text.indexOf("Delete security-rules.mdc") > start);
     assert.ok(text.includes("native-components-rules.mdc"));
+    assert.ok(text.includes('"file"'));
+    assert.ok(text.includes('"how"'));
+  });
+
+  test("readPlan accepts rule/effect and ruleFile/effect aliases from the agent", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "plan-alias-"));
+    const file = path.join(dir, "plan.json");
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        approach: "Change the theme store",
+        filesToChange: ["src/stores/theme.store.js"],
+        modules: ["theme"],
+        testsToRunOrWrite: [],
+        rulesApplied: [
+          { rule: ".cursor/rules/security-rules.mdc", effect: "no new storage keys" },
+          { ruleFile: ".cursor/rules/central-project-rules.mdc", effect: "Pinia only" },
+          { file: ".cursor/rules/native-components-rules.mdc", how: "no ejs" },
+          ".cursor/rules/new-component-rules.mdc",
+        ],
+        risks: [],
+        questions: [],
+      })
+    );
+    const parsed = readPlan(file);
+    assert.equal(parsed.ok, true, parsed.reason);
+    assert.deepEqual(parsed.value.rulesApplied, [
+      { file: ".cursor/rules/security-rules.mdc", how: "no new storage keys" },
+      { file: ".cursor/rules/central-project-rules.mdc", how: "Pinia only" },
+      { file: ".cursor/rules/native-components-rules.mdc", how: "no ejs" },
+      ".cursor/rules/new-component-rules.mdc",
+    ]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("readPlan still rejects rulesApplied objects with no file name", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "plan-bad-"));
+    const file = path.join(dir, "plan.json");
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        approach: "Change the theme store",
+        filesToChange: [],
+        modules: [],
+        testsToRunOrWrite: [],
+        rulesApplied: [{ effect: "mystery" }],
+        risks: [],
+        questions: [],
+      })
+    );
+    const parsed = readPlan(file);
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.reason, "schema");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("readResult accepts the same rulesApplied aliases", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "result-alias-"));
+    const file = path.join(dir, "result.json");
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        summary: "done",
+        filesChanged: ["src/stores/theme.store.js"],
+        rulesApplied: [{ rule: ".cursor/rules/security-rules.mdc", effect: "no new keys" }],
+        deviations: [],
+      })
+    );
+    const parsed = readResult(file);
+    assert.equal(parsed.ok, true, parsed.reason);
+    assert.deepEqual(parsed.value.rulesApplied, [
+      { file: ".cursor/rules/security-rules.mdc", how: "no new keys" },
+    ]);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   test("matching planHash is stored on the decision", async () => {

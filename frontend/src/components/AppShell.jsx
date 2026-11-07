@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext'
 export default function AppShell() {
   const { user, logout } = useAuth()
   const location = useLocation()
-  const editorBleed = /^\/workflows\//.test(location.pathname)
+  const editorBleed = /^\/workflows\/[^/]+\/?$/.test(location.pathname)
 
   return (
     <div className="app-shell">

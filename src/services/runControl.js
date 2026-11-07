@@ -58,14 +58,14 @@ async function cancelRun(runId, deps = {}) {
 
   const ticket = await TicketRun.findOne({ runId: String(run._id) });
   if (ticket) {
-    if (ticketState.isTerminal(ticket.state) && ticket.state !== "cancelled") {
+    if (ticketState.isTerminal(ticket.state) && ticket.state !== "cancelled" && ticket.state !== "failed") {
       return { http: 409, error: "Run cannot be cancelled" };
     }
     if (ticket.state !== "cancelled") {
-      const moved = await ticketState.transition(ticket._id, ticket.state, "cancelled", {
+      const moved = await ticketState.markEnded(ticket.runId, "cancelled", {
         failureReason: "cancelled",
       });
-      if (!moved.ok && ticket.state !== "cancelled") {
+      if (!moved.ok && ticket.state !== "cancelled" && ticket.state !== "failed") {
         return { http: 409, error: "Run cannot be cancelled" };
       }
     }

@@ -51,15 +51,35 @@ function startAgentWorker() {
   const worker = new Worker(
     "agent-queue",
     async (job) => {
-      const runtime = job.data && job.data.runtime;
+      const data = job.data || {};
+      console.log(
+        "[agent-worker] Job picked up — jobId:",
+        job.id,
+        "nodeId:",
+        data.nodeId,
+        "mode:",
+        data.mode,
+        "runtime:",
+        data.runtime
+      );
+      const runtime = data.runtime;
       await handleAgentJob(job, {
         enqueueSettle,
         egressHosts: config.cursorEgressHosts,
         startContainer: runtime === "host" ? startAgentHost : startContainer,
       });
+      console.log("[agent-worker] Job finished — jobId:", job.id);
     },
     { connection, concurrency: 1 }
   );
+  worker.on("failed", (job, err) => {
+    console.error(
+      "[agent-worker] Job failed — jobId:",
+      job && job.id,
+      "error:",
+      err && err.message
+    );
+  });
   worker.on("error", (err) => {
     console.error("[agent-worker]", err.message);
   });

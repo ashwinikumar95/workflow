@@ -53,13 +53,55 @@ async function seedDraftWorkflows(deps = {}) {
   const defs = deps.seeds || loadSeedDefs();
   const created = [];
   const kept = [];
+  const repaired = [];
   for (const seed of defs) {
-    const existing = await WorkflowModel.findOne({
+    const byKey = await WorkflowModel.findOne({
       userId: user._id,
       "trigger.config.seedKey": seed.seedKey,
     });
-    if (existing) {
-      kept.push({ seedKey: seed.seedKey, id: String(existing._id), status: existing.status });
+    const stripped = await WorkflowModel.findOne({
+      userId: user._id,
+      name: seed.name,
+      $or: [
+        { "trigger.config.seedKey": { $exists: false } },
+        { "trigger.config.seedKey": null },
+        { "trigger.config.seedKey": "" },
+      ],
+    });
+    if (stripped) {
+      const plain = stripped.toObject();
+      const prior =
+        plain.trigger && plain.trigger.config && typeof plain.trigger.config === "object"
+          ? plain.trigger.config
+          : {};
+      await WorkflowModel.updateOne(
+        { _id: stripped._id },
+        {
+          $set: {
+            "trigger.config": {
+              ...prior,
+              seedKey: seed.seedKey,
+              intake: seed.intake,
+              profileKeys: seed.profileKeys,
+            },
+          },
+        }
+      );
+      repaired.push({ seedKey: seed.seedKey, id: String(stripped._id), status: stripped.status });
+      console.log(`[workflow-seed] Restored trigger identity ${seed.seedKey} (${stripped._id})`);
+      if (
+        byKey &&
+        String(byKey._id) !== String(stripped._id) &&
+        byKey.status === "draft" &&
+        byKey.name === seed.name
+      ) {
+        await WorkflowModel.deleteOne({ _id: byKey._id, userId: user._id, status: "draft" });
+        console.log(`[workflow-seed] Removed duplicate draft ${seed.seedKey} (${byKey._id})`);
+      }
+      continue;
+    }
+    if (byKey) {
+      kept.push({ seedKey: seed.seedKey, id: String(byKey._id), status: byKey.status });
       continue;
     }
     const graph = graphForSeed(seed, profiles);
@@ -78,7 +120,7 @@ async function seedDraftWorkflows(deps = {}) {
     created.push({ seedKey: seed.seedKey, id: String(doc._id) });
     console.log(`[workflow-seed] Restored draft ${seed.seedKey} (${doc._id})`);
   }
-  return { skipped: false, email, created, kept };
+  return { skipped: false, email, created, kept, repaired };
 }
 
 module.exports = { seedDraftWorkflows, loadSeedDefs, ownerEmail, SEED_FILE };

@@ -129,9 +129,22 @@ async function startTicket(issue, profile, options = {}) {
 
   const existing = await latestTicket(issue.key);
   if (existing && !ticketState.isTerminal(existing.state)) {
-    return { ok: false, reason: "duplicate", jiraKey: issue.key, runId: existing.runId };
+    const liveRun = await Run.findById(existing.runId).select("status").lean();
+    const runEnded =
+      !liveRun || ["failed", "cancelled", "success"].includes(liveRun.status);
+    if (!runEnded) {
+      return { ok: false, reason: "duplicate", jiraKey: issue.key, runId: existing.runId };
+    }
+    await ticketState.markEnded(existing.runId, liveRun && liveRun.status === "cancelled" ? "cancelled" : "failed", {
+      failureReason: "run already ended",
+    });
   }
-  if (existing && existing.fingerprint && existing.fingerprint === issue.fingerprint) {
+  if (
+    source !== "paste" &&
+    existing &&
+    existing.fingerprint &&
+    existing.fingerprint === issue.fingerprint
+  ) {
     return { ok: false, reason: "unchanged", jiraKey: issue.key, runId: existing.runId };
   }
 

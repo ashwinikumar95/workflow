@@ -45,18 +45,35 @@ function interpolate(template, input) {
   });
 }
 
+function profileForIssue(issueKey) {
+  try {
+    return resolveProfile(issueKey, parseProfiles());
+  } catch {
+    return null;
+  }
+}
+
 function resolveTransitionName(cfg, issueKey) {
   const raw = cfg && typeof cfg.transition === "string" ? cfg.transition.trim() : "";
   if (!raw) return "";
-  try {
-    const profile = resolveProfile(issueKey, parseProfiles());
-    if (profile && profile.transitions && profile.transitions[raw]) {
-      return profile.transitions[raw];
-    }
-  } catch {
-    // Profiles are optional for ad-hoc nodes; use the configured name as-is.
+  const profile = profileForIssue(issueKey);
+  if (profile && profile.transitions && profile.transitions[raw]) {
+    return profile.transitions[raw];
   }
   return raw;
+}
+
+function resolveTransitionFields(cfg, profile) {
+  const raw = cfg && typeof cfg.transition === "string" ? cfg.transition.trim() : "";
+  const fromProfile =
+    profile && profile.transitionFields && raw && profile.transitionFields[raw]
+      ? profile.transitionFields[raw]
+      : {};
+  const fromCfg =
+    cfg && cfg.transitionFields && typeof cfg.transitionFields === "object" && !Array.isArray(cfg.transitionFields)
+      ? cfg.transitionFields
+      : {};
+  return { ...fromProfile, ...fromCfg };
 }
 
 function nodeRepository(node) {
@@ -294,24 +311,35 @@ async function jiraNode(_node, input) {
 async function jiraUpdateNode(node, input, runState) {
   const base = asObject(input);
   const cfg = node && node.config && typeof node.config === "object" ? node.config : {};
+  const fromRun =
+    runState && runState.context && typeof runState.context === "object" ? runState.context : null;
   const key =
     (base.jira && typeof base.jira.key === "string" && base.jira.key) ||
-    (typeof base.issueKey === "string" ? base.issueKey : "");
+    (typeof base.issueKey === "string" ? base.issueKey : "") ||
+    (fromRun && fromRun.jira && typeof fromRun.jira.key === "string" && fromRun.jira.key) ||
+    (fromRun && typeof fromRun.issueKey === "string" ? fromRun.issueKey : "");
   const marker =
     typeof cfg.marker === "string" && cfg.marker.trim()
       ? cfg.marker.trim()
       : jira.commentMarker(runState && runState.runId, runState && runState.nodeId);
   const statusName = resolveTransitionName(cfg, key);
+  const profile = profileForIssue(key);
+  const commentTemplate = typeof cfg.comment === "string" ? cfg.comment : "";
+  const commentText = commentTemplate.trim() ? interpolate(commentTemplate, base).trim() : "";
+  const reason = typeof base.reason === "string" ? base.reason : "";
   const update = { marker };
   if (statusName) {
     update.transition = await jira.transitionIssue(key, statusName, {
       marker,
       commentOnMissing: true,
+      commentText: commentText || reason,
+      reason,
+      transitionFields: resolveTransitionFields(cfg, profile),
+      preferredStatuses: profile && profile.transitions ? Object.values(profile.transitions) : [],
     });
   }
-  const commentTemplate = typeof cfg.comment === "string" ? cfg.comment : "";
   if (commentTemplate.trim()) {
-    const text = `${interpolate(commentTemplate, base)}\n${marker}`.trim();
+    const text = `${commentText}\n${marker}`.trim();
     update.comment = await jira.addComment(key, text, marker);
   }
   return { ...base, jiraUpdate: update };
@@ -336,9 +364,14 @@ async function cursorPromptNode(node, input, runState) {
   let manifest = base.rulesManifest;
   if (repoRoot && fs.existsSync(repoRoot)) {
     const named = rulesService.rulesMentionedInTicket(base.jira || {}, repoRoot);
+    const topical = rulesService.filesForTopics(
+      profile && profile.rules && profile.rules.topicIncludes,
+      base.jira || {}
+    );
     const forced = [
       ...((profile && profile.rules && profile.rules.forceInclude) || []),
       ...named,
+      ...topical,
     ];
     manifest = rulesService.buildManifest({
       repoRoot,
@@ -574,6 +607,7 @@ async function cursorAgentNode(node, input, runState) {
     return {
       ...base,
       branch,
+      reason: branch === "false" ? (result && result.reason) || "no-commit" : undefined,
       headSha: result && result.sha ? result.sha : null,
       result: artifact && artifact.ok ? artifact.value : undefined,
     };

@@ -15,6 +15,34 @@ const ruleAppliedSchema = z.union([
   }),
 ]);
 
+function firstNonEmptyString(item, keys) {
+  if (!item || typeof item !== "object") return "";
+  for (const key of keys) {
+    const value = item[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+function normalizeRuleApplied(item) {
+  if (typeof item === "string") {
+    const text = item.trim();
+    return text || item;
+  }
+  if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+  const file = firstNonEmptyString(item, ["file", "rule", "ruleFile", "name", "path"]);
+  if (!file) return item;
+  const how = firstNonEmptyString(item, ["how", "affect", "effect", "reason"]);
+  return how ? { file, how } : { file };
+}
+
+function withNormalizedRules(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || !Array.isArray(value.rulesApplied)) {
+    return value;
+  }
+  return { ...value, rulesApplied: value.rulesApplied.map(normalizeRuleApplied) };
+}
+
 const planSchema = z.object({
   approach: z.string().min(1),
   filesToChange: z.array(z.string()),
@@ -123,7 +151,7 @@ function parseWith(schema, value) {
 function readPlan(file) {
   const raw = parseJsonFile(file);
   if (!raw.ok) return raw;
-  const checked = parseWith(planSchema, raw.value);
+  const checked = parseWith(planSchema, withNormalizedRules(raw.value));
   if (!checked.ok) return checked;
   return { ok: true, value: checked.value, hash: raw.hash };
 }
@@ -131,7 +159,7 @@ function readPlan(file) {
 function readResult(file) {
   const raw = parseJsonFile(file);
   if (!raw.ok) return raw;
-  const checked = parseWith(resultSchema, raw.value);
+  const checked = parseWith(resultSchema, withNormalizedRules(raw.value));
   if (!checked.ok) return checked;
   return { ok: true, value: checked.value, hash: raw.hash };
 }
@@ -171,4 +199,5 @@ module.exports = {
   readResult,
   readReview,
   validateModeArtifact,
+  normalizeRuleApplied,
 };

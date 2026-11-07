@@ -47,6 +47,32 @@ async function handleWorkflowJob(job, token) {
   }
 }
 
+function isFinalAttempt(job) {
+  const max =
+    job && job.opts && Number.isInteger(job.opts.attempts) && job.opts.attempts > 0
+      ? job.opts.attempts
+      : 1;
+  const made = job && Number.isInteger(job.attemptsMade) ? job.attemptsMade : 0;
+  return made >= max;
+}
+
+async function notifyWorkflowJobFailed(job, err) {
+  if (!isFinalAttempt(job)) return;
+  if (job && job.name === "settle-wait") {
+    const data = job.data && typeof job.data === "object" ? job.data : {};
+    const { failWaitingExternal } = require("../services/waitCompletion");
+    await failWaitingExternal({
+      runId: data.runId,
+      kind: data.kind,
+      nodeId: data.nodeId,
+      externalJobId: data.externalJobId,
+      error: err,
+    });
+  }
+  const slack = require("../services/slackService");
+  await slack.emitFromJob(job, err);
+}
+
 function startWorkflowWorker() {
   const connection = config.redisConnection;
   const worker = new Worker(
@@ -79,10 +105,9 @@ function startWorkflowWorker() {
       "[Worker] BullMQ failed event — jobId:",
       job?.id,
       "error:",
-      err.message
+      err && err.message
     );
-    const slack = require("../services/slackService");
-    slack.emitFromJob(job, err).catch((notifyErr) => {
+    notifyWorkflowJobFailed(job, err).catch((notifyErr) => {
       console.error("[Worker] Slack crash notify failed:", notifyErr.message);
     });
   });
@@ -134,5 +159,7 @@ if (process.env.WORKFLOW_WORKER_AUTOSTART !== "false") {
 module.exports = {
   buildWorkflowWorkerOptions,
   handleWorkflowJob,
+  isFinalAttempt,
+  notifyWorkflowJobFailed,
   startWorkflowWorker,
 };
