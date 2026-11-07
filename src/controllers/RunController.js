@@ -1,6 +1,8 @@
 const mongoose = require("mongoose");
 const Run = require("../models/Run");
-const Workflow = require("../models/Workflow");
+const Workflow = require("../models/workflow");
+const { redactRunForResponse } = require("../utils/redactSecrets");
+const { recordDecision } = require("../services/approvalService");
 
 function invalidIdResponse(res) {
   return res.status(400).json({ error: "Invalid id" });
@@ -35,7 +37,12 @@ exports.listRunsForWorkflow = async (req, res) => {
       Run.countDocuments({ workflowId: id }),
     ]);
 
-    res.json({ runs, page, limit, total });
+    res.json({
+      runs: runs.map((run) => redactRunForResponse(run)),
+      page,
+      limit,
+      total,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -61,7 +68,31 @@ exports.getRunById = async (req, res) => {
       return notFoundResponse(res);
     }
 
-    res.json(run);
+    res.json(redactRunForResponse(run));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.decideRun = async (req, res) => {
+  try {
+    const { runId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(runId)) return invalidIdResponse(res);
+
+    const run = await Run.findById(runId).lean();
+    if (!run) return notFoundResponse(res);
+
+    const wf = await Workflow.findById(run.workflowId).select("userId").lean();
+    if (!wf) return notFoundResponse(res);
+    if (String(wf.userId) !== String(req.user.id)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    const outcome = await recordDecision(run._id, req.body && req.body.decision, req.user.id);
+    if (outcome.http === 200) {
+      return res.status(200).json(redactRunForResponse(outcome.run));
+    }
+    return res.status(outcome.http).json({ error: outcome.error });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -16,6 +16,14 @@ import HttpNode from '../components/nodes/HttpNode'
 import ConditionNode from '../components/nodes/ConditionNode'
 import DelayNode from '../components/nodes/DelayNode'
 import NotifyNode from '../components/nodes/NotifyNode'
+import ApprovalNode from '../components/nodes/ApprovalNode'
+import JiraNode from '../components/nodes/JiraNode'
+import AnalysisNode from '../components/nodes/AnalysisNode'
+import CursorPromptNode from '../components/nodes/CursorPromptNode'
+import GitBranchNode from '../components/nodes/GitBranchNode'
+import CursorAgentNode from '../components/nodes/CursorAgentNode'
+import PlaywrightNode from '../components/nodes/PlaywrightNode'
+import GithubPrNode from '../components/nodes/GithubPrNode'
 import KeyValueRows from '../components/KeyValueRows'
 import UxSection from '../components/UxSection'
 import { webhookUrl, workflowApi } from '../lib/api'
@@ -45,7 +53,17 @@ const nodeTypes = {
   condition: ConditionNode,
   delay: DelayNode,
   notify: NotifyNode,
+  approval: ApprovalNode,
+  jira: JiraNode,
+  analysis: AnalysisNode,
+  cursorPrompt: CursorPromptNode,
+  gitBranch: GitBranchNode,
+  cursorAgent: CursorAgentNode,
+  playwright: PlaywrightNode,
+  githubPr: GithubPrNode,
 }
+
+const branchNodeTypes = new Set(['approval', 'cursorAgent', 'playwright'])
 
 function parseBodyJson(text) {
   const t = text.trim()
@@ -63,11 +81,16 @@ export default function WorkflowEditor() {
   const [status, setStatus] = useState('draft')
   const [triggerType, setTriggerType] = useState('webhook')
   const [webhookSecret, setWebhookSecret] = useState('')
+  const [webhookSecretSet, setWebhookSecretSet] = useState(false)
   const [cronRepeat, setCronRepeat] = useState('daily')
   const [cronDateTime, setCronDateTime] = useState(() => defaultCronDatetimeLocal())
   const [cronAdvanced, setCronAdvanced] = useState(false)
   const [cronAdvancedExpr, setCronAdvancedExpr] = useState('')
   const [triggersEnabled, setTriggersEnabled] = useState(true)
+  const [webhookProvider, setWebhookProvider] = useState('generic')
+  const [repoLocation, setRepoLocation] = useState('')
+  const [repoBranch, setRepoBranch] = useState('main')
+  const [repoCredentialRef, setRepoCredentialRef] = useState('GITHUB_TOKEN')
 
   const [nodes, setNodes, onNodesChange] = useNodesState([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
@@ -117,11 +140,14 @@ export default function WorkflowEditor() {
       }
       setTriggersEnabled(data.trigger?.enabled !== false)
       setWebhookSecret('')
+      setWebhookSecretSet(false)
     } else if (tt === 'webhook') {
       setTriggerType('webhook')
       setWebhookSecret(
         typeof data.trigger?.config?.secret === 'string' ? data.trigger.config.secret : ''
       )
+      setWebhookSecretSet(data.trigger?.config?.secretSet === true)
+      setWebhookProvider(data.trigger?.config?.provider === 'jira' ? 'jira' : 'generic')
       setCronAdvanced(false)
       setCronRepeat('daily')
       setCronDateTime(defaultCronDatetimeLocal())
@@ -130,12 +156,19 @@ export default function WorkflowEditor() {
     } else {
       setTriggerType('webhook')
       setWebhookSecret('')
+      setWebhookSecretSet(false)
       setCronAdvanced(false)
       setCronRepeat('daily')
       setCronDateTime(defaultCronDatetimeLocal())
       setCronAdvancedExpr('')
       setTriggersEnabled(true)
     }
+    const repo = data.repository || {}
+    setRepoLocation(typeof repo.location === 'string' ? repo.location : '')
+    setRepoBranch(typeof repo.defaultBranch === 'string' && repo.defaultBranch ? repo.defaultBranch : 'main')
+    setRepoCredentialRef(
+      typeof repo.credentialRef === 'string' && repo.credentialRef ? repo.credentialRef : 'GITHUB_TOKEN'
+    )
     const { nodes: n, edges: e } = workflowToFlow(data)
     setNodes(n)
     setEdges(e)
@@ -191,12 +224,15 @@ export default function WorkflowEditor() {
   const onConnect = useCallback(
     (params) => {
       if (!canEditGraph) return
+      const condition =
+        params.sourceHandle === 'true' || params.sourceHandle === 'false' ? params.sourceHandle : ''
       setEdges((eds) =>
         addEdge(
           {
             ...params,
             type: 'smoothstep',
-            data: { condition: '' },
+            data: { condition },
+            label: condition,
           },
           eds
         )
@@ -215,6 +251,14 @@ export default function WorkflowEditor() {
         condition: 'Condition',
         delay: 'Delay',
         notify: 'Notify',
+        approval: 'Approval',
+        jira: 'Jira',
+        analysis: 'Analysis',
+        cursorPrompt: 'Cursor prompt',
+        gitBranch: 'Git branch',
+        cursorAgent: 'Cursor agent',
+        playwright: 'Playwright',
+        githubPr: 'Pull request',
       }
       setNodes((nds) => [
         ...nds,
@@ -268,24 +312,36 @@ export default function WorkflowEditor() {
     (condition) => {
       if (!selectedEdgeId || !canEditGraph) return
       setEdges((eds) =>
-        eds.map((e) =>
-          e.id === selectedEdgeId
-            ? {
-                ...e,
-                data: { ...e.data, condition },
-                label: condition === 'true' || condition === 'false' ? condition : '',
-              }
-            : e
-        )
+        eds.map((e) => {
+          if (e.id !== selectedEdgeId) return e
+          const source = nodes.find((n) => n.id === e.source)
+          const branched = condition === 'true' || condition === 'false'
+          return {
+            ...e,
+            sourceHandle: branchNodeTypes.has(source?.type) && branched ? condition : undefined,
+            data: { ...e.data, condition },
+            label: branched ? condition : '',
+          }
+        })
       )
     },
-    [selectedEdgeId, setEdges, canEditGraph]
+    [selectedEdgeId, setEdges, canEditGraph, nodes]
   )
+
+  function buildRepositoryPayload() {
+    return {
+      location: repoLocation.trim(),
+      defaultBranch: repoBranch.trim(),
+      credentialRef: repoCredentialRef.trim(),
+    }
+  }
 
   function buildTriggerPayload() {
     if (triggerType === 'webhook') {
       const config = {}
+      if (webhookProvider === 'jira') config.provider = 'jira'
       if (webhookSecret.trim()) config.secret = webhookSecret.trim()
+      else if (webhookSecretSet) config.secretSet = true
       return { type: 'webhook', enabled: triggersEnabled, config }
     }
     const cron = cronAdvanced
@@ -323,6 +379,7 @@ export default function WorkflowEditor() {
         name: name.trim() || 'Untitled',
         status: 'draft',
         trigger: buildTriggerPayload(),
+        repository: buildRepositoryPayload(),
         nodes: nodes.map(nodeToBackend),
         edges: edges.map(edgeToBackend),
       }
@@ -365,6 +422,7 @@ export default function WorkflowEditor() {
           name: name.trim() || 'Untitled',
           status: 'draft',
           trigger: buildTriggerPayload(),
+          repository: buildRepositoryPayload(),
           nodes: nodes.map(nodeToBackend),
           edges: edges.map(edgeToBackend),
         }
@@ -439,7 +497,7 @@ export default function WorkflowEditor() {
         const fs = outs.filter((e) => e.data?.condition === 'false').length
         if (count === 2 && (ts !== 1 || fs !== 1)) {
           warnings.push(
-            `${labelFor(src)} should have exactly one True line and one False line after a Condition.`
+            `${labelFor(src)} should have exactly one True line and one False line.`
           )
         }
       }
@@ -523,7 +581,7 @@ export default function WorkflowEditor() {
         <UxSection
           step={2}
           title="When should it run?"
-          hint="Pick how a run starts. If the diagram is still editable, use Save in step 3 after changing this."
+          hint="Pick how a run starts. If the diagram is still editable, use Save draft after changing this."
         >
           <fieldset className="fieldset" disabled={!canEditGraph}>
             <legend>Start method</legend>
@@ -559,15 +617,39 @@ export default function WorkflowEditor() {
           </fieldset>
 
           {triggerType === 'webhook' ? (
-            <label className="field">
-              <span>Shared secret (optional)</span>
-              <input
-                value={webhookSecret}
-                onChange={(e) => setWebhookSecret(e.target.value)}
-                placeholder="If set, callers must send header X-Webhook-Secret"
-                disabled={!canEditGraph}
-              />
-            </label>
+            <>
+              <label className="field">
+                <span>Webhook source</span>
+                <select
+                  value={webhookProvider}
+                  onChange={(e) => setWebhookProvider(e.target.value)}
+                  disabled={!canEditGraph}
+                >
+                  <option value="generic">Generic JSON webhook</option>
+                  <option value="jira">Jira Automation</option>
+                </select>
+              </label>
+              {webhookProvider === 'jira' ? (
+                <p className="muted small">
+                  Jira sends <code className="inline-code">issueKey</code> and <code className="inline-code">eventId</code>.
+                  The API compares <code className="inline-code">X-Webhook-Secret</code> with{' '}
+                  <code className="inline-code">JIRA_WEBHOOK_SECRET</code>. The token stays on the server.
+                </p>
+              ) : null}
+              <label className="field">
+                <span>Shared secret (optional)</span>
+                <input
+                  value={webhookSecret}
+                  onChange={(e) => setWebhookSecret(e.target.value)}
+                  placeholder={
+                    webhookSecretSet
+                      ? 'A secret is saved. Type a new one to replace it.'
+                      : 'If set, callers must send header X-Webhook-Secret'
+                  }
+                  disabled={!canEditGraph}
+                />
+              </label>
+            </>
           ) : null}
 
           {triggerType === 'cron' ? (
@@ -664,6 +746,40 @@ export default function WorkflowEditor() {
 
         <UxSection
           step={3}
+          title="Application repository"
+          hint="Set this once for the workflow. The credential reference is the name of an environment variable on the workflow worker, not the token."
+        >
+          <label className="field">
+            <span>Repository location</span>
+            <input
+              value={repoLocation}
+              onChange={(e) => setRepoLocation(e.target.value)}
+              placeholder="Path the worker can read, or the repository URL"
+              disabled={!canEditGraph}
+            />
+          </label>
+          <label className="field">
+            <span>Default branch</span>
+            <input
+              value={repoBranch}
+              onChange={(e) => setRepoBranch(e.target.value)}
+              placeholder="main"
+              disabled={!canEditGraph}
+            />
+          </label>
+          <label className="field">
+            <span>Credential reference</span>
+            <input
+              value={repoCredentialRef}
+              onChange={(e) => setRepoCredentialRef(e.target.value)}
+              placeholder="GITHUB_TOKEN"
+              disabled={!canEditGraph}
+            />
+          </label>
+        </UxSection>
+
+        <UxSection
+          step={4}
           title="Build your steps"
           hint={
             canEditGraph
@@ -675,7 +791,11 @@ export default function WorkflowEditor() {
             <ul className="ux-tip-list">
               <li>Add steps with the tiles below.</li>
               <li>Click a step on the board to edit URL, headers, timing, or messages here.</li>
-              <li>After a <strong>Condition</strong>, draw two lines and mark each as True or False.</li>
+              <li>
+                After a <strong>Condition</strong>, <strong>Approval</strong>, <strong>Cursor agent</strong>, or{' '}
+                <strong>Playwright</strong> step, draw two lines and mark each as True or False. Approval uses the
+                Approve and Reject dots.
+              </li>
             </ul>
           ) : null}
 
@@ -716,6 +836,43 @@ export default function WorkflowEditor() {
               <span className="ux-node-card-title">Notify</span>
               <span className="ux-node-card-desc">Send a Slack message (if the server is configured)</span>
             </button>
+            <button
+              type="button"
+              className="ux-node-card"
+              onClick={() => addNode('approval')}
+              disabled={!canEditGraph}
+            >
+              <span className="ux-node-card-title">Approval</span>
+              <span className="ux-node-card-desc">Pause until you approve or reject this run</span>
+            </button>
+            <button type="button" className="ux-node-card" onClick={() => addNode('jira')} disabled={!canEditGraph}>
+              <span className="ux-node-card-title">Jira issue</span>
+              <span className="ux-node-card-desc">Load the ticket summary and description</span>
+            </button>
+            <button type="button" className="ux-node-card" onClick={() => addNode('analysis')} disabled={!canEditGraph}>
+              <span className="ux-node-card-title">Analysis</span>
+              <span className="ux-node-card-desc">Summarize the ticket before anyone edits the repo</span>
+            </button>
+            <button type="button" className="ux-node-card" onClick={() => addNode('cursorPrompt')} disabled={!canEditGraph}>
+              <span className="ux-node-card-title">Cursor prompt</span>
+              <span className="ux-node-card-desc">Build the prompt the approval step will show</span>
+            </button>
+            <button type="button" className="ux-node-card" onClick={() => addNode('gitBranch')} disabled={!canEditGraph}>
+              <span className="ux-node-card-title">Git branch</span>
+              <span className="ux-node-card-desc">Create this run’s worktree after approval</span>
+            </button>
+            <button type="button" className="ux-node-card" onClick={() => addNode('cursorAgent')} disabled={!canEditGraph}>
+              <span className="ux-node-card-title">Cursor agent</span>
+              <span className="ux-node-card-desc">Edit the worktree. Done follows true, failure follows false</span>
+            </button>
+            <button type="button" className="ux-node-card" onClick={() => addNode('playwright')} disabled={!canEditGraph}>
+              <span className="ux-node-card-title">Playwright</span>
+              <span className="ux-node-card-desc">Run the suite against the tested revision</span>
+            </button>
+            <button type="button" className="ux-node-card" onClick={() => addNode('githubPr')} disabled={!canEditGraph}>
+              <span className="ux-node-card-title">Pull request</span>
+              <span className="ux-node-card-desc">Open a request after Playwright passes. Nothing here merges it</span>
+            </button>
           </div>
 
           <div className="sidebar-actions-footer">
@@ -740,7 +897,7 @@ export default function WorkflowEditor() {
         ) : null}
 
         <UxSection
-          step={4}
+          step={5}
           title="Go live"
           hint={
             isPublished
@@ -760,7 +917,7 @@ export default function WorkflowEditor() {
               </button>
               <p className="muted small">
                 After publishing you get <strong>Run now</strong>, optional <strong>webhook URL</strong>, and{' '}
-                <strong>pause</strong>. Fix any yellow warnings in step 3 first if they appear.
+                <strong>pause</strong>. Fix any yellow warnings in the steps section first if they appear.
               </p>
             </div>
           ) : null}
@@ -1064,6 +1221,162 @@ export default function WorkflowEditor() {
                 />
               </label>
             </div>
+          ) : selectedNode && nodeKind === 'approval' ? (
+            <div className="form-stack tight">
+              <p className="muted small">
+                The run pauses on this step until you approve or reject it. Connect Approve to the true path and Reject
+                to the false path. The title is only a label.
+              </p>
+              <label className="field">
+                <span>Title</span>
+                <input
+                  value={selectedNode.data?.config?.title || ''}
+                  onChange={(e) => updateSelectedNodeConfig({ title: e.target.value })}
+                  disabled={!canEditGraph}
+                />
+              </label>
+            </div>
+          ) : selectedNode && ['jira', 'analysis', 'cursorPrompt', 'gitBranch', 'cursorAgent', 'githubPr'].includes(nodeKind) ? (
+            <div className="form-stack tight">
+              <p className="muted small">
+                This title is a label. Repository paths, API tokens, and model keys stay in the worker environment.
+              </p>
+              <label className="field">
+                <span>Title</span>
+                <input
+                  value={selectedNode.data?.config?.title || ''}
+                  onChange={(e) => updateSelectedNodeConfig({ title: e.target.value })}
+                  disabled={!canEditGraph}
+                />
+              </label>
+            </div>
+          ) : selectedNode && nodeKind === 'playwright' ? (
+            <div className="form-stack tight">
+              <p className="muted small">
+                Choose where the tests live and which application revision they boot. There is no default. Tokens stay
+                in the environment.
+              </p>
+              <label className="field">
+                <span>Title</span>
+                <input
+                  value={selectedNode.data?.config?.title || ''}
+                  onChange={(e) => updateSelectedNodeConfig({ title: e.target.value })}
+                  disabled={!canEditGraph}
+                />
+              </label>
+              <label className="field">
+                <span>Where the tests live</span>
+                <select
+                  value={selectedNode.data?.config?.strategy || ''}
+                  onChange={(e) => updateSelectedNodeConfig({ strategy: e.target.value })}
+                  disabled={!canEditGraph}
+                >
+                  <option value="">Choose one</option>
+                  <option value="in-repo">Use the application repository for Playwright tests</option>
+                  <option value="external-repo">Use a separate Playwright repository</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Application under test</span>
+                <select
+                  value={selectedNode.data?.config?.target || ''}
+                  onChange={(e) => updateSelectedNodeConfig({ target: e.target.value })}
+                  disabled={!canEditGraph}
+                >
+                  <option value="">Choose one</option>
+                  <option value="local-worktree">Boot this run’s worktree</option>
+                  <option value="deployed-preview">Deployed preview of the tested revision</option>
+                </select>
+              </label>
+              {selectedNode.data?.config?.strategy === 'in-repo' ? (
+                <label className="field">
+                  <span>Test path</span>
+                  <input
+                    value={selectedNode.data?.config?.testPath || ''}
+                    onChange={(e) => updateSelectedNodeConfig({ testPath: e.target.value })}
+                    disabled={!canEditGraph}
+                  />
+                </label>
+              ) : null}
+              {selectedNode.data?.config?.strategy === 'external-repo' ? (
+                <>
+                  <label className="field">
+                    <span>Playwright repository location</span>
+                    <input
+                      value={selectedNode.data?.config?.testRepository?.location || ''}
+                      onChange={(e) =>
+                        updateSelectedNodeConfig({
+                          testRepository: {
+                            ...(selectedNode.data?.config?.testRepository || {}),
+                            location: e.target.value,
+                          },
+                        })
+                      }
+                      disabled={!canEditGraph}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Playwright default branch</span>
+                    <input
+                      value={selectedNode.data?.config?.testRepository?.defaultBranch || ''}
+                      onChange={(e) =>
+                        updateSelectedNodeConfig({
+                          testRepository: {
+                            ...(selectedNode.data?.config?.testRepository || {}),
+                            defaultBranch: e.target.value,
+                          },
+                        })
+                      }
+                      disabled={!canEditGraph}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Test command, one argument per line</span>
+                    <textarea
+                      rows={3}
+                      value={(selectedNode.data?.config?.testCommand || []).join('\n')}
+                      onChange={(e) =>
+                        updateSelectedNodeConfig({
+                          testCommand: e.target.value.split('\n').map((line) => line.trim()).filter(Boolean),
+                        })
+                      }
+                      disabled={!canEditGraph}
+                    />
+                  </label>
+                </>
+              ) : null}
+              {selectedNode.data?.config?.target === 'local-worktree' ? (
+                <>
+                  <label className="field">
+                    <span>App command, one argument per line</span>
+                    <textarea
+                      rows={3}
+                      value={(selectedNode.data?.config?.appCommand || []).join('\n')}
+                      onChange={(e) =>
+                        updateSelectedNodeConfig({
+                          appCommand: e.target.value.split('\n').map((line) => line.trim()).filter(Boolean),
+                        })
+                      }
+                      disabled={!canEditGraph}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Readiness path</span>
+                    <input
+                      value={selectedNode.data?.config?.readiness || ''}
+                      onChange={(e) => updateSelectedNodeConfig({ readiness: e.target.value })}
+                      disabled={!canEditGraph}
+                    />
+                  </label>
+                </>
+              ) : null}
+              {selectedNode.data?.config?.target === 'deployed-preview' ? (
+                <p className="muted small">
+                  A preview must prove the deployed revision. This workspace does not have a verified preview adapter,
+                  so a run that selects this target fails closed.
+                </p>
+              ) : null}
+            </div>
           ) : selectedNode && nodeKind === 'notify' ? (
             <div className="form-stack tight">
               <p className="muted small">
@@ -1103,8 +1416,8 @@ export default function WorkflowEditor() {
                 </select>
               </label>
               <p className="muted small">
-                Only the two lines leaving a <strong>Condition</strong> should be True or False. Other steps keep
-                “Single path”.
+                The two lines leaving a <strong>Condition</strong> or <strong>Approval</strong> should be True or False.
+                Approve follows True. Reject follows False. Other steps keep “Single path”.
               </p>
             </div>
           ) : (
@@ -1115,7 +1428,7 @@ export default function WorkflowEditor() {
                   <strong>Click a step</strong> to edit URL, headers, timing, or notifications.
                 </li>
                 <li>
-                  <strong>Click a line</strong> after a Condition to mark the True or False path.
+                  <strong>Click a line</strong> after a Condition, Approval, Cursor agent, or Playwright step to mark the True or False path.
                 </li>
               </ul>
             </div>

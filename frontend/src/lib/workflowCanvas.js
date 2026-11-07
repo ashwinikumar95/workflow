@@ -21,6 +21,29 @@ const defaultNotifyConfig = () => ({
   message: 'Workflow step: {{payload}}',
 })
 
+const defaultApprovalConfig = () => ({
+  title: 'Approval',
+})
+
+const defaultJiraConfig = () => ({ title: 'Jira' })
+const defaultAnalysisConfig = () => ({ title: 'Analysis' })
+const defaultCursorPromptConfig = () => ({ title: 'Cursor prompt' })
+const defaultGitBranchConfig = () => ({ title: 'Git branch' })
+const defaultCursorAgentConfig = () => ({ title: 'Cursor agent' })
+const defaultPlaywrightConfig = () => ({
+  title: 'Playwright',
+  strategy: '',
+  target: '',
+  testPath: '',
+  appCommand: [],
+  readiness: '/health',
+  testCommand: [],
+  testRepository: { location: '', defaultBranch: '', credentialRef: '' },
+})
+const defaultGithubPrConfig = () => ({ title: 'Pull request' })
+
+const branchTypes = new Set(['approval', 'cursorAgent', 'playwright'])
+
 export function defaultConfigForType(type) {
   switch (type) {
     case 'condition':
@@ -29,6 +52,22 @@ export function defaultConfigForType(type) {
       return defaultDelayConfig()
     case 'notify':
       return defaultNotifyConfig()
+    case 'approval':
+      return defaultApprovalConfig()
+    case 'jira':
+      return defaultJiraConfig()
+    case 'analysis':
+      return defaultAnalysisConfig()
+    case 'cursorPrompt':
+      return defaultCursorPromptConfig()
+    case 'gitBranch':
+      return defaultGitBranchConfig()
+    case 'cursorAgent':
+      return defaultCursorAgentConfig()
+    case 'playwright':
+      return defaultPlaywrightConfig()
+    case 'githubPr':
+      return defaultGithubPrConfig()
     case 'http':
     default:
       return defaultHttpConfig()
@@ -76,6 +115,14 @@ const labels = {
   condition: 'Condition',
   delay: 'Delay',
   notify: 'Notify',
+  approval: 'Approval',
+  jira: 'Jira',
+  analysis: 'Analysis',
+  cursorPrompt: 'Cursor prompt',
+  gitBranch: 'Git branch',
+  cursorAgent: 'Cursor agent',
+  playwright: 'Playwright',
+  githubPr: 'Pull request',
 }
 
 /**
@@ -106,17 +153,28 @@ export function workflowToFlow(workflow) {
     }
   })
 
-  const edges = (workflow.edges || []).map((e, idx) => ({
-    id: `e-${e.from}-${e.to}-${idx}`,
-    source: e.from,
-    target: e.to,
-    label: e.condition === 'true' || e.condition === 'false' ? e.condition : '',
-    type: 'smoothstep',
-    markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--edge)' },
-    data: { condition: e.condition === 'true' || e.condition === 'false' ? e.condition : '' },
-  }))
+  const edges = (workflow.edges || []).map((e, idx) => {
+    const sourceNode = list.find((n) => n.id === e.from)
+    const branched = e.condition === 'true' || e.condition === 'false'
+    return {
+      id: `e-${e.from}-${e.to}-${idx}`,
+      source: e.from,
+      target: e.to,
+      sourceHandle: branchTypes.has(sourceNode?.type) && branched ? e.condition : undefined,
+      label: branched ? e.condition : '',
+      type: 'smoothstep',
+      markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--edge)' },
+      data: { condition: branched ? e.condition : '' },
+    }
+  })
 
   return { nodes, edges }
 }
 
-export { defaultHttpConfig, defaultConditionConfig, defaultDelayConfig, defaultNotifyConfig }
+export {
+  defaultHttpConfig,
+  defaultConditionConfig,
+  defaultDelayConfig,
+  defaultNotifyConfig,
+  defaultApprovalConfig,
+}

@@ -3,15 +3,20 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --require ./test-support/env.js --test --test-concurrency=1",
     "start": "node app.js",
-    "dev": "nodemon app.js"
+    "dev": "nodemon app.js",
+    "worker": "node src/workers/worker.js",
+    "worker:agent": "node src/workers/agentWorker.mjs",
+    "worker:playwright": "node src/workers/playwrightWorker.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@cursor/sdk": "^1.2.0",
+    "@octokit/rest": "^22.0.1",
     "axios": "^1.15.0",
     "bullmq": "^5.74.1",
     "cors": "^2.8.6",
@@ -22,7 +27,8 @@
     "mongoose": "^9.4.1",
     "node-cron": "^4.2.1",
     "path": "^0.12.7",
-    "uuid": "^14.0.0"
+    "uuid": "^14.0.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"

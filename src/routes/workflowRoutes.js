@@ -11,7 +11,7 @@ const {
   deleteWorkflow,
   publishWorkflow,
   startWorkflow
-} = require("../controllers/WorkflowController");
+} = require("../controllers/workflowController");
 const { listRunsForWorkflow } = require("../controllers/RunController");
 
 router.post("/", auth, createWorkflow);
