@@ -140,6 +140,8 @@ async function executeNode(node, input, runState) {
         input && typeof input === "object" && !Array.isArray(input)
           ? { ...input }
           : { payload: input };
+      payload.message = text;
+      payload.eventType = type;
       if (result && (result.skipped || result.status === "logged")) payload._notifySkipped = true;
       return payload;
     }

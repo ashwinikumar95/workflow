@@ -260,7 +260,9 @@ async function startAgentHost(_spec, data) {
   await fs.promises.mkdir(path.dirname(promptFile), { recursive: true });
   await fs.promises.writeFile(promptFile, data.prompt || "");
   const receiptFile =
-    receiptPathForWorktree(worktree) ||
+    (runId && data.nodeId
+      ? agentReceiptPath(config.worktreesDir || path.dirname(worktree), runId, data.nodeId)
+      : receiptPathForWorktree(worktree, data.nodeId)) ||
     (runId ? agentReceiptPath(config.worktreesDir || path.dirname(worktree), runId) : "");
   const artifactDir =
     data.artifactDir ||

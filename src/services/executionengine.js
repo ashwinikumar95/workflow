@@ -24,6 +24,8 @@ const engine = {
   resumeWorkflow,
   getNextNode,
   executeWithRetry,
+  carryForward,
+  preview,
 };
 
 function claimBusy() {
@@ -39,10 +41,72 @@ function resolveJobId(jobId) {
   return uuidv4();
 }
 
+const PREVIEW_SKIP = new Set([
+  "analysis",
+  "artifactDir",
+  "description",
+  "descriptionText",
+  "fingerprint",
+  "issueId",
+  "jira",
+  "plan",
+  "profileKey",
+  "prompt",
+  "repoPath",
+  "rulesApplied",
+  "rulesManifest",
+  "source",
+  "worktreePath",
+]);
+
+function compactPreview(value) {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) return value;
+  const out = {};
+  const jira = value.jira && typeof value.jira === "object" ? value.jira : {};
+  if (typeof value.issueKey === "string" && value.issueKey) out.issueKey = value.issueKey;
+  else if (typeof jira.key === "string" && jira.key) out.issueKey = jira.key;
+  const summary = value.summary || jira.summary;
+  if (typeof summary === "string" && summary) out.summary = summary.slice(0, 120);
+  if (value.branch === true || value.branch === "true" || value.branch === false || value.branch === "false") {
+    out.branch = String(value.branch);
+  }
+  if (value.reason != null && value.reason !== "") out.reason = String(value.reason).slice(0, 80);
+  if (value.message != null && value.message !== "") out.message = String(value.message).slice(0, 80);
+  if (typeof value.prUrl === "string" && value.prUrl) out.prUrl = value.prUrl;
+  if (typeof value.agentMode === "string" && value.agentMode) out.agentMode = value.agentMode;
+  if (value.guardFailed) out.guardFailed = true;
+  if (typeof value.prompt === "string" && value.prompt.trim()) {
+    out.prompt = value.prompt.trim().slice(0, 80);
+  }
+  if (value.plan && typeof value.plan === "object" && value.plan.approach) {
+    out.plan = String(value.plan.approach).slice(0, 80);
+  }
+  for (const [key, val] of Object.entries(value)) {
+    if (key in out || PREVIEW_SKIP.has(key) || val == null || typeof val === "object") continue;
+    const text = String(val);
+    out[key] = text.length > 80 ? text.slice(0, 80) : val;
+  }
+  return out;
+}
+
 function preview(value) {
-  const text = JSON.stringify(value);
-  if (typeof text !== "string") return "";
-  return text.slice(0, 200);
+  if (value === undefined) return "";
+  if (value === null) return "null";
+  if (typeof value !== "object") {
+    const text = String(value);
+    return text.length <= 200 ? text : text.slice(0, 200);
+  }
+  const compact = compactPreview(value);
+  const keys = Object.keys(compact);
+  while (keys.length) {
+    const text = JSON.stringify(compact);
+    if (typeof text === "string" && text.length <= 200) return text;
+    const drop = keys.pop();
+    delete compact[drop];
+  }
+  const fallback = JSON.stringify(value);
+  if (typeof fallback !== "string") return "";
+  return fallback.slice(0, 200);
 }
 
 function assertContextLimit(context) {
@@ -135,11 +199,17 @@ async function persistRun(runId, token, patch) {
       $concatArrays: [{ $ifNull: ["$logs", []] }, [{ $literal: patch.log }]],
     };
   }
-  return Run.findOneAndUpdate(
+  const saved = await Run.findOneAndUpdate(
     holderFilter(runId, token),
     externalPipeline(setDoc, patch.external),
     pipelineUpdate
   );
+  if (saved && patch.status === "failed") {
+    await ticketState.markEnded(saved._id, "failed", {
+      failureReason: patch.log && patch.log.error,
+    });
+  }
+  return saved;
 }
 
 function externalPipeline(setDoc, external) {
@@ -361,6 +431,22 @@ async function executeWithRetry(node, input, retries = 3, runState) {
     }
   }
   throw lastError;
+}
+
+function carryForward(previous, output) {
+  if (output && typeof output === "object" && !Array.isArray(output)) return output;
+  const base =
+    previous && typeof previous === "object" && !Array.isArray(previous)
+      ? { ...previous }
+      : previous === undefined
+        ? {}
+        : { payload: previous };
+  if (output === true || output === false) {
+    base.branch = output ? "true" : "false";
+    return base;
+  }
+  if (output !== undefined) base.payload = output;
+  return base;
 }
 
 function getNextNode(workflow, currentNode, result) {
@@ -759,6 +845,7 @@ async function walkClaimed(workflow, run, token, position, leaseMs) {
       nodeId: currentNode.id,
       workflow,
       node: currentNode,
+      context: currentInput,
       predecessorId,
       external: externalState,
       resumed,
@@ -881,8 +968,9 @@ async function walkClaimed(workflow, run, token, position, leaseMs) {
 
     const next = getNextNode(workflow, currentNode, output);
     const done = next == null;
+    const nextInput = carryForward(currentInput, output);
     const saved = await engine.persistRun(run._id, token, {
-      context: output,
+      context: nextInput,
       currentNodeId: next ? next.id : null,
       status: done ? "success" : "running",
       ended: done,
@@ -897,7 +985,7 @@ async function walkClaimed(workflow, run, token, position, leaseMs) {
     if (!saved) throw claimBusy();
 
     predecessorId = currentNode.id;
-    currentInput = output;
+    currentInput = nextInput;
     currentNode = next;
   }
 

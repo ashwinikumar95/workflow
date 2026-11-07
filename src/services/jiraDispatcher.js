@@ -50,14 +50,62 @@ async function latestTicket(jiraKey) {
   return TicketRun.findOne({ jiraKey }).sort({ createdAt: -1, _id: -1 });
 }
 
-async function findProfileWorkflow(profileKey, deps = {}) {
-  if (typeof deps.findWorkflow === "function") {
-    return deps.findWorkflow(profileKey);
+function isAppTicketKey(profileKey) {
+  return profileKey === "MF" || profileKey === "MFC";
+}
+
+async function findPublishedByIntake(profileKey, intake) {
+  if (intake === "manual") {
+    return Workflow.findOne({
+      status: "published",
+      "trigger.config.intake": "manual",
+      "trigger.config.profileKeys": profileKey,
+    }).sort({ updatedAt: -1 });
   }
   return Workflow.findOne({
     profileKey,
     status: "published",
+    "trigger.config.intake": "bucket",
   }).sort({ updatedAt: -1 });
+}
+
+async function findUnlabeledPublished(profileKey) {
+  return Workflow.findOne({
+    profileKey,
+    status: "published",
+    $or: [
+      { "trigger.config.intake": { $exists: false } },
+      { "trigger.config.intake": null },
+      { "trigger.config.intake": "" },
+    ],
+  }).sort({ updatedAt: -1 });
+}
+
+async function findProfileWorkflow(profileKey, deps = {}, source = "bucket") {
+  if (typeof deps.findWorkflow === "function") {
+    return deps.findWorkflow(profileKey, source);
+  }
+  if (source === "paste") {
+    const manual = await findPublishedByIntake(profileKey, "manual");
+    if (manual) return manual;
+    const unlabeled = await findUnlabeledPublished(profileKey);
+    if (unlabeled) return unlabeled;
+    return Workflow.findOne({ profileKey, status: "published" }).sort({ updatedAt: -1 });
+  }
+  if (isAppTicketKey(profileKey)) {
+    return findPublishedByIntake(profileKey, "bucket");
+  }
+  const unlabeled = await findUnlabeledPublished(profileKey);
+  if (unlabeled) return unlabeled;
+  return Workflow.findOne({ profileKey, status: "published" }).sort({ updatedAt: -1 });
+}
+
+async function hasPublishedBucketWorkflow(profileKey, deps = {}) {
+  if (typeof deps.hasBucketWorkflow === "function") {
+    return deps.hasBucketWorkflow(profileKey);
+  }
+  const workflow = await findPublishedByIntake(profileKey, "bucket");
+  return Boolean(workflow) && !workflowPaused(workflow);
 }
 
 function workflowPaused(workflow) {
@@ -81,13 +129,26 @@ async function startTicket(issue, profile, options = {}) {
 
   const existing = await latestTicket(issue.key);
   if (existing && !ticketState.isTerminal(existing.state)) {
-    return { ok: false, reason: "duplicate", jiraKey: issue.key, runId: existing.runId };
+    const liveRun = await Run.findById(existing.runId).select("status").lean();
+    const runEnded =
+      !liveRun || ["failed", "cancelled", "success"].includes(liveRun.status);
+    if (!runEnded) {
+      return { ok: false, reason: "duplicate", jiraKey: issue.key, runId: existing.runId };
+    }
+    await ticketState.markEnded(existing.runId, liveRun && liveRun.status === "cancelled" ? "cancelled" : "failed", {
+      failureReason: "run already ended",
+    });
   }
-  if (existing && existing.fingerprint && existing.fingerprint === issue.fingerprint) {
+  if (
+    source !== "paste" &&
+    existing &&
+    existing.fingerprint &&
+    existing.fingerprint === issue.fingerprint
+  ) {
     return { ok: false, reason: "unchanged", jiraKey: issue.key, runId: existing.runId };
   }
 
-  const workflow = await findProfileWorkflow(profile.jiraKey, deps);
+  const workflow = await findProfileWorkflow(profile.jiraKey, deps, source);
   if (!workflow) {
     return { ok: false, reason: "missing_workflow", jiraKey: issue.key };
   }
@@ -276,6 +337,11 @@ async function dispatch(options = {}) {
       const list = Object.values(profiles).filter((profile) => profile.enabled);
       for (const profile of list) {
         const row = emptyProfileReport(profile);
+        if (isAppTicketKey(profile.jiraKey) && !(await hasPublishedBucketWorkflow(profile.jiraKey, deps))) {
+          row.skipped.push({ reason: "missing_workflow" });
+          report.profiles.push(row);
+          continue;
+        }
         await pollProfile(profile, deps, false, row);
         report.profiles.push(row);
       }
@@ -296,6 +362,17 @@ async function dispatch(options = {}) {
   return report;
 }
 
+async function pollOneProfile(profileKey, options = {}) {
+  const extraDeps = options.deps && typeof options.deps === "object" ? options.deps : {};
+  const deps = { ...options, ...extraDeps };
+  const profiles = profilesFrom(deps);
+  const profile = profiles[profileKey];
+  if (!profile) return { ok: false, reason: "unknown_project", jiraKey: profileKey };
+  const row = emptyProfileReport(profile);
+  await pollProfile(profile, deps, Boolean(options.dryRun), row);
+  return row;
+}
+
 module.exports = {
   DISPATCHER_LOCK,
   DISPATCHER_OWNER,
@@ -304,4 +381,7 @@ module.exports = {
   startFromIssue,
   dispatch,
   searchDepsFor,
+  findProfileWorkflow,
+  pollOneProfile,
+  hasPublishedBucketWorkflow,
 };

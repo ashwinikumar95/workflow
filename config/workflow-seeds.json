@@ -1,0 +1,35 @@
+[
+  {
+    "seedKey": "manual-mf-mfc",
+    "name": "Manual MF or MFC ticket",
+    "intake": "manual",
+    "profileKeys": ["MF", "MFC"],
+    "trigger": {
+      "type": "webhook",
+      "enabled": true,
+      "config": { "provider": "jira" }
+    }
+  },
+  {
+    "seedKey": "bucket-mfc",
+    "name": "MFC tickets from my bucket",
+    "intake": "bucket",
+    "profileKeys": ["MFC"],
+    "trigger": {
+      "type": "cron",
+      "enabled": true,
+      "config": { "cron": "*/5 * * * *" }
+    }
+  },
+  {
+    "seedKey": "bucket-mf",
+    "name": "MF tickets from my bucket",
+    "intake": "bucket",
+    "profileKeys": ["MF"],
+    "trigger": {
+      "type": "cron",
+      "enabled": true,
+      "config": { "cron": "*/5 * * * *" }
+    }
+  }
+]

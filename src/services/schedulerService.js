@@ -70,12 +70,21 @@ async function syncCronSchedulesFromDb() {
 
     const id = wf._id.toString();
     const workflowObjectId = wf._id;
+    const intake = wf.trigger && wf.trigger.config && wf.trigger.config.intake;
+    const profileKey =
+      wf.profileKey ||
+      (Array.isArray(wf.trigger.config.profileKeys) ? wf.trigger.config.profileKeys[0] : "");
 
     const task = cron.schedule(
       trimmed,
       async () => {
         try {
-          await enqueueWorkflowJob(workflowObjectId, {});
+          if (intake === "bucket") {
+            const { pollOneProfile } = require("./jiraDispatcher");
+            await pollOneProfile(profileKey, { dryRun: false });
+          } else {
+            await enqueueWorkflowJob(workflowObjectId, {});
+          }
         } catch (err) {
           console.error(`[scheduler] Cron run failed (${id}):`, err.message);
         }

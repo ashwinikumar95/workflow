@@ -11,6 +11,7 @@ const TicketRun = require("../src/models/TicketRun");
 const ResourceLock = require("../src/models/ResourceLock");
 const rulesService = require("../src/services/rulesService");
 const rulesChecks = require("../src/services/rulesChecks");
+const lifecycle = require("../src/nodes/lifecycle");
 const jira = require("../src/services/jiraService");
 const dispatcher = require("../src/services/jiraDispatcher");
 const recovery = require("../src/services/recovery");
@@ -37,6 +38,14 @@ const GLOB_MFC = [
   ".cursor/rules/performance-optimization-rules.mdc",
   ".cursor/rules/testing-validation-rules.mdc",
   ".cursor/rules/vxceed-grid-rules.mdc",
+];
+const COMPOSITION_MFC = [
+  ".cursor/rules/DEVELOPER_PROMPT.md",
+  ".cursor/rules/COMPOSITION_API_EXPLAINED.md",
+];
+const DOWNSTREAM_MFC = [
+  ".cursor/rules/DOWNSTREAM_MIGRATION_FRONTEND_SKILL.md",
+  ".cursor/rules/DOWNSTREAM_MIGRATION_REVIEW_SKILL.md",
 ];
 
 const PREV_BASE = process.env.JIRA_BASE_URL;
@@ -164,6 +173,102 @@ describe("jira-pr phase 11 MFC and hardening", () => {
       plannedFiles: ["README.md"],
     });
     assert.deepEqual(readmeOnly.rulesApplied.map((rule) => rule.file).sort(), ALWAYS_MFC.slice().sort());
+    for (const file of COMPOSITION_MFC.concat(DOWNSTREAM_MFC)) {
+      assert.equal(fuji.rulesApplied.some((rule) => rule.file === file), false, file);
+    }
+  });
+
+  test("MFC screen docs are always included and gateway skills only for that work", async () => {
+    for (const file of COMPOSITION_MFC.concat(DOWNSTREAM_MFC)) {
+      const name = path.basename(file);
+      const draft = fs.readFileSync(path.join(MFC_DRAFT, name), "utf8");
+      const fixture = fs.readFileSync(path.join(MFC_FIXTURE, file), "utf8");
+      assert.equal(fixture, draft, name);
+    }
+    assert.match(fs.readFileSync(path.join(MFC_DRAFT, "DEVELOPER_PROMPT.md"), "utf8"), /Options API only/);
+    assert.match(fs.readFileSync(path.join(MFC_DRAFT, "DOWNSTREAM_MIGRATION_FRONTEND_SKILL.md"), "utf8"), /USE_GLOBAL_AUTH/);
+    assert.match(
+      fs.readFileSync(path.join(MFC_DRAFT, "DOWNSTREAM_MIGRATION_FRONTEND_SKILL.md"), "utf8"),
+      /lhu\.central\.access_token/
+    );
+
+    const topics = parseProfiles().MFC.rules.topicIncludes;
+    assert.deepEqual(
+      rulesService.filesForTopics(topics, {
+        summary: "Add a column to the outlet grid",
+        descriptionText: "Keep Options API.",
+      }),
+      []
+    );
+    assert.deepEqual(
+      rulesService.filesForTopics(topics, {
+        summary: "Fix the global authorization matrix",
+        descriptionText: "",
+      }),
+      []
+    );
+    assert.deepEqual(
+      rulesService.filesForTopics(topics, {
+        summary: "Downstream migration onto Global Auth",
+        descriptionText: "Ship behind USE_GLOBAL_AUTH.",
+      }),
+      DOWNSTREAM_MFC
+    );
+
+    const screen = await lifecycle.cursorPrompt(
+      { id: "promptPlan", type: "cursorPrompt", config: { mode: "plan" } },
+      {
+        issueKey: "MFC-20",
+        profileKey: "MFC",
+        jira: {
+          key: "MFC-20",
+          summary: "Add a column to the outlet grid",
+          descriptionText: "Keep Options API. Do not change behavior.",
+        },
+        analysis: { filesLikelyTouched: ["src/views/Target.vue"] },
+        worktreePath: MFC_FIXTURE,
+      },
+      { runId: "c".repeat(24) }
+    );
+    for (const file of COMPOSITION_MFC) {
+      const entry = screen.rulesManifest.rules.find((rule) => rule.file === file);
+      assert.ok(entry, file);
+      assert.equal(entry.reason, "forced");
+      assert.equal(entry.presentation, "inline");
+    }
+    for (const file of DOWNSTREAM_MFC) {
+      assert.equal(screen.rulesManifest.rules.some((rule) => rule.file === file), false, file);
+    }
+    assert.match(screen.prompt, /Do NOT add setup\(\)/);
+    assert.doesNotMatch(screen.prompt, /migrating Fuji-Vue3/);
+
+    const downstream = await lifecycle.cursorPrompt(
+      { id: "promptPlan", type: "cursorPrompt", config: { mode: "plan" } },
+      {
+        issueKey: "MFC-21",
+        profileKey: "MFC",
+        jira: {
+          key: "MFC-21",
+          summary: "Downstream migration onto Global Auth",
+          descriptionText: "Ship behind USE_GLOBAL_AUTH and then run the review skill.",
+        },
+        analysis: { filesLikelyTouched: ["src/router/index.js"] },
+        worktreePath: MFC_FIXTURE,
+      },
+      { runId: "d".repeat(24) }
+    );
+    for (const file of DOWNSTREAM_MFC) {
+      const entry = downstream.rulesManifest.rules.find((rule) => rule.file === file);
+      assert.ok(entry, file);
+      assert.equal(entry.reason, "forced");
+      assert.equal(entry.presentation, "referenced");
+    }
+    for (const file of COMPOSITION_MFC) {
+      const entry = downstream.rulesManifest.rules.find((rule) => rule.file === file);
+      assert.ok(entry, file);
+      assert.equal(entry.reason, "forced");
+    }
+    assert.match(downstream.prompt, /DOWNSTREAM_MIGRATION_FRONTEND_SKILL\.md/);
   });
 
   test("MFC mechanical checks fire on positive fixtures and not on negatives", () => {
@@ -193,6 +298,38 @@ describe("jira-pr phase 11 MFC and hardening", () => {
         file: "src/views/Target.vue",
         positive: 'console.log("debug")',
         negative: 'logger.info("debug")',
+      },
+      {
+        id: "no-localstorage-auth-token",
+        file: "src/stores/session.store.js",
+        positive: "localStorage.setItem('lhu.central.access_token', token)",
+        negative: "localStorage.setItem('lang', 'en-ph')",
+      },
+      {
+        id: "no-extra-sessionstorage-auth-token",
+        file: "src/stores/session.store.js",
+        positive: "sessionStorage.setItem('refresh_token', token)",
+        negative: "sessionStorage.setItem('lhu.central.access_token', token)",
+      },
+      {
+        id: "no-src-lib",
+        file: "src/lib/gatewayAuth.js",
+        positive: "export function redeem() {}",
+        negativeFile: "src/utils/gatewayAuth.js",
+        negative: "export function redeem() {}",
+      },
+      {
+        id: "no-src-composables",
+        file: "src/composables/useSession.js",
+        positive: "export function useSession() {}",
+        negativeFile: "src/utils/appContext.js",
+        negative: "export function useSession() {}",
+      },
+      {
+        id: "no-vite-env-config",
+        file: "src/config/index.js",
+        positive: "const gateway = import.meta.env.VITE_GATEWAY_URL",
+        negative: "history: createWebHistory(import.meta.env.BASE_URL)",
       },
       {
         id: "no-dist-edits",
@@ -355,7 +492,15 @@ describe("jira-pr phase 11 MFC and hardening", () => {
       profileKey: "MF",
       nodes: [{ id: "start", type: "delay", config: { seconds: 0 } }],
       edges: [],
-      trigger: { type: "cron", enabled: true, config: { cron: "*/5 * * * *" } },
+      trigger: { type: "cron", enabled: true, config: { cron: "*/5 * * * *", intake: "bucket", profileKeys: ["MF"] } },
+    });
+    await Workflow.create({
+      name: "MFC pipeline",
+      status: "published",
+      profileKey: "MFC",
+      nodes: [{ id: "start", type: "delay", config: { seconds: 0 } }],
+      edges: [],
+      trigger: { type: "cron", enabled: true, config: { cron: "*/5 * * * *", intake: "bucket", profileKeys: ["MFC"] } },
     });
     const enqueued = [];
     const http = {

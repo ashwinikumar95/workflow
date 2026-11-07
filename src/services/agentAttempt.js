@@ -11,6 +11,9 @@ function classifyAgentTree(observed, mode) {
   const preAgentSha = observed && observed.preAgentSha;
   const same = Boolean(head) && head === preAgentSha;
   const readOnly = isReadOnlyMode(normalizeMode(mode) || mode);
+  const attemptStarted = Boolean(
+    (observed && observed.hasReceipt) || (observed && observed.sdkStatus === "finished")
+  );
 
   if (observed && observed.containerRunning) return { action: "wait" };
 
@@ -18,11 +21,10 @@ function classifyAgentTree(observed, mode) {
     if (!clean || !same) {
       return { action: "settle", branch: "false", reason: "plan-dirty" };
     }
-    if (observed.sdkStatus === "finished" || observed.hasReceipt) {
+    if (attemptStarted) {
       return { action: "settle", branch: "true", sha: head };
     }
-    if (!observed.hasReceipt) return { action: "start" };
-    return { action: "settle", branch: "false" };
+    return { action: "start" };
   }
 
   const goodCommit =
@@ -32,25 +34,27 @@ function classifyAgentTree(observed, mode) {
     observed.diffEmpty === false;
 
   if (goodCommit) return { action: "settle", branch: "true", sha: head };
-  if (!clean || (!same && !goodCommit)) return { action: "settle", branch: "false" };
-  if (observed.sdkStatus === "finished" && same) return { action: "settle", branch: "false" };
-  if (observed.hasReceipt && same) return { action: "settle", branch: "false" };
-  if (clean && same && !observed.hasReceipt) return { action: "start" };
+  if (!attemptStarted) return { action: "start" };
+  if (!clean || (!same && !goodCommit) || same) {
+    return { action: "settle", branch: "false", reason: "no-commit" };
+  }
   return { action: "settle", branch: "false" };
 }
 
-function agentReceiptPath(worktreesDir, runId) {
+function agentReceiptPath(worktreesDir, runId, nodeId) {
   const id = String(runId || "");
   if (!/^[a-f0-9]{24}$/.test(id)) throw new Error("Run id must be 24 hex characters");
-  return path.join(worktreesDir, id, "receipts", "agent-execution.json");
+  const node = typeof nodeId === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(nodeId) ? nodeId : "";
+  const file = node ? `${node}.json` : "agent-execution.json";
+  return path.join(worktreesDir, id, "receipts", file);
 }
 
-function receiptPathForWorktree(worktreePath) {
+function receiptPathForWorktree(worktreePath, nodeId) {
   if (!worktreePath) return "";
   const resolved = path.resolve(worktreePath);
   const match = /^([a-f0-9]{24})-[A-Za-z0-9_-]{1,64}$/.exec(path.basename(resolved));
   if (!match) return "";
-  return agentReceiptPath(path.dirname(resolved), match[1]);
+  return agentReceiptPath(path.dirname(resolved), match[1], nodeId);
 }
 
 async function fileExists(file) {
@@ -63,13 +67,19 @@ async function fileExists(file) {
   }
 }
 
-async function defaultInspect(worktreePath, preAgentSha) {
+async function defaultInspect(worktreePath, preAgentSha, extra = {}) {
   const head = await git.revParse(worktreePath);
   const clean = await git.isClean(worktreePath);
   const descendant = await git.isAncestor(preAgentSha, head, worktreePath);
   const diffEmpty = await git.diffIsEmpty(preAgentSha, head, worktreePath);
+  const runId = extra && extra.runId;
+  const nodeId = extra && extra.nodeId;
+  const nodeReceipt =
+    runId && nodeId
+      ? agentReceiptPath(path.dirname(path.resolve(worktreePath)), runId, nodeId)
+      : receiptPathForWorktree(worktreePath, nodeId);
   const hasReceipt =
-    (await fileExists(receiptPathForWorktree(worktreePath))) ||
+    (await fileExists(nodeReceipt)) ||
     (await fileExists(path.join(worktreePath, ".workflow", "agent-execution.json")));
   return {
     clean,
@@ -122,14 +132,15 @@ async function handleAgentJob(job, deps) {
     return { started: false };
   }
 
-  const observed = await inspect(data.worktreePath, data.preAgentSha);
+  const inspectExtra = { runId: data.runId, nodeId: data.nodeId };
+  const observed = await inspect(data.worktreePath, data.preAgentSha, inspectExtra);
   if (deps.containerRunning) observed.containerRunning = true;
   const mode = normalizeMode(data.mode) || data.mode;
   const decision = classifyAgentTree(observed, mode);
 
   if (decision.action === "wait") {
     if (deps.waitForContainer) await deps.waitForContainer(data);
-    const after = await inspect(data.worktreePath, data.preAgentSha);
+    const after = await inspect(data.worktreePath, data.preAgentSha, inspectExtra);
     const again = classifyAgentTree(after, mode);
     await enqueueSettle(settlePayload(data, again.branch === "true" ? "true" : "false", again));
     return { started: false };
@@ -161,7 +172,7 @@ async function handleAgentJob(job, deps) {
       await enqueueSettle(settlePayload(data, "false", { reason: "symlink" }));
       return { started: true };
     }
-    const after = await inspect(data.worktreePath, data.preAgentSha);
+    const after = await inspect(data.worktreePath, data.preAgentSha, inspectExtra);
     after.sdkStatus = result && result.status ? result.status : after.sdkStatus;
     if (result && result.receipt) after.hasReceipt = true;
     const done = classifyAgentTree(after, mode);
@@ -187,7 +198,7 @@ async function handleAgentJob(job, deps) {
     );
     return { started: true };
   } catch (err) {
-    const after = await inspect(data.worktreePath, data.preAgentSha);
+    const after = await inspect(data.worktreePath, data.preAgentSha, inspectExtra);
     const retryable = Boolean(err && err.retryable);
     if (err && err.runtimeMissing) throw err;
     if (retryable && after.clean && after.head === data.preAgentSha) {

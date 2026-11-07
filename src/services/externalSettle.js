@@ -7,9 +7,22 @@ function withBranch(data, branch, extra) {
   return { ...data, result };
 }
 
+function agentJobAlreadyDecided(data) {
+  const result = data && data.result && typeof data.result === "object" ? data.result : {};
+  return result.branch === "true" || result.branch === "false";
+}
+
+function notReadyError() {
+  const err = new Error("agent settle is not ready");
+  err.retryable = true;
+  return err;
+}
+
 /**
  * Re-check agent and Playwright evidence on the workflow worker.
  * The container exit code and `result.status === "finished"` are not authority.
+ * A branch already set by the agent job is a terminal decision: do not throw
+ * `start` and leave the run waiting forever.
  */
 async function prepareExternalSettle(data) {
   if (!data || data.kind === "approval" || (data.kind !== "agent" && data.kind !== "playwright")) {
@@ -24,7 +37,10 @@ async function prepareExternalSettle(data) {
     if (!worktree || !preAgentSha) return withBranch(data, "false");
     let observed;
     try {
-      observed = await defaultInspect(worktree, preAgentSha);
+      observed = await defaultInspect(worktree, preAgentSha, {
+        runId: data.runId,
+        nodeId: data.nodeId,
+      });
       observed.containerRunning = false;
       observed.sdkStatus = data.result && data.result.status ? data.result.status : null;
     } catch {
@@ -32,8 +48,25 @@ async function prepareExternalSettle(data) {
     }
     const mode = data.mode || (data.result && data.result.mode);
     const decision = classifyAgentTree(observed, mode);
+    const decided = agentJobAlreadyDecided(data);
+    if (decision.action === "wait" && !decided) {
+      throw notReadyError();
+    }
+    if (decision.action === "start") {
+      if (!decided) throw notReadyError();
+      const result = data.result || {};
+      return withBranch(data, "false", {
+        sha: observed.head,
+        status: result.status || observed.sdkStatus,
+        reason: result.reason || "no-commit",
+      });
+    }
     const branch = decision.branch === "true" ? "true" : "false";
-    return withBranch(data, branch, { sha: decision.sha || observed.head, status: observed.sdkStatus });
+    return withBranch(data, branch, {
+      sha: decision.sha || observed.head,
+      status: observed.sdkStatus,
+      reason: decision.reason,
+    });
   }
 
   const worktree = data.worktreePath || external.worktreePath;

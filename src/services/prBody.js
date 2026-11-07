@@ -9,8 +9,9 @@ function asList(value) {
 
 function ruleName(item) {
   if (typeof item === "string") return item;
-  if (item && typeof item === "object" && item.file) return String(item.file);
-  return "";
+  if (!item || typeof item !== "object") return "";
+  const file = item.file || item.rule || item.ruleFile;
+  return file ? String(file) : "";
 }
 
 function browseUrl(issueKey) {

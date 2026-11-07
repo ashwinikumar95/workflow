@@ -228,6 +228,53 @@ async function enqueuePendingResumes() {
   }
 }
 
+/**
+ * Last-resort: settle-wait exhausted while the run is still parked.
+ * Marks the run failed so Retry works instead of leaving it waiting forever.
+ */
+async function failWaitingExternal({ runId, kind, nodeId, externalJobId, error }) {
+  if (!runId || (kind !== "agent" && kind !== "playwright")) {
+    return { matched: false, run: null };
+  }
+  const message = error && error.message ? String(error.message) : "external wait failed";
+  const updated = await Run.findOneAndUpdate(
+    {
+      _id: runId,
+      status: "waiting",
+      "wait.state": "pending",
+      "wait.kind": kind,
+      "wait.nodeId": nodeId,
+      "wait.externalJobId": externalJobId,
+    },
+    {
+      $set: {
+        status: "failed",
+        endedAt: new Date(),
+        executionClaim: null,
+        executionClaimExpiresAt: null,
+      },
+      $push: {
+        logs: {
+          nodeId: nodeId || undefined,
+          status: "failed",
+          error: message,
+        },
+      },
+    },
+    { returnDocument: "after" }
+  );
+  if (!updated) {
+    return { matched: false, run: runId ? await Run.findById(runId) : null };
+  }
+  const ticketState = require("./ticketState");
+  const recovery = require("./recovery");
+  const TicketRun = require("../models/TicketRun");
+  const ticket = await TicketRun.findOne({ runId: String(updated._id) });
+  await recovery.killRunProcesses(updated, ticket);
+  await ticketState.markEnded(updated._id, "failed", { failureReason: message });
+  return { matched: true, run: updated };
+}
+
 async function enqueuePendingExternalJobs() {
   const rows = await Run.find({
     status: "waiting",
@@ -266,6 +313,7 @@ async function enqueuePendingExternalJobs() {
 module.exports = {
   completeExternalWait,
   settleWait,
+  failWaitingExternal,
   enqueuePendingResumes,
   enqueuePendingExternalJobs,
   setResumeEnqueue,

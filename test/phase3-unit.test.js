@@ -9,7 +9,7 @@ const { analyzeIssue } = require("../src/services/analysisService");
 const { prepareJiraDelivery } = require("../src/services/triggerService");
 const github = require("../src/services/githubPrService");
 const git = require("../src/services/gitService");
-const { classifyAgentTree, handleAgentJob } = require("../src/services/agentAttempt");
+const { classifyAgentTree, handleAgentJob, agentReceiptPath } = require("../src/services/agentAttempt");
 const { handlePlaywrightJob } = require("../src/services/playwrightAttempt");
 const {
   buildAgentContainerSpec,
@@ -339,6 +339,16 @@ describe("phase 3 unit", () => {
     assert.throws(() => assertPinnedImage("mcr.microsoft.com/playwright:latest"));
   });
 
+  test("plan and implement receipts do not share a file", () => {
+    const dir = path.join(os.tmpdir(), "wf-receipts");
+    const runId = "c".repeat(24);
+    const plan = agentReceiptPath(dir, runId, "agentPlan");
+    const impl = agentReceiptPath(dir, runId, "agentImpl");
+    assert.notEqual(plan, impl);
+    assert.match(plan, /agentPlan\.json$/);
+    assert.match(impl, /agentImpl\.json$/);
+  });
+
   test("agent classification does not treat a clean tree or a dirty retry as success", async () => {
     const finished = classifyAgentTree({
       clean: true,
@@ -365,6 +375,20 @@ describe("phase 3 unit", () => {
     assert.equal(committed.branch, "true");
     assert.equal(committed.action, "settle");
 
+    const dirtyUnstarted = classifyAgentTree(
+      {
+        clean: false,
+        head: "aaa",
+        preAgentSha: "aaa",
+        descendant: true,
+        diffEmpty: true,
+        hasReceipt: false,
+        containerRunning: false,
+      },
+      "implement"
+    );
+    assert.equal(dirtyUnstarted.action, "start");
+
     let started = 0;
     const settled = [];
     await handleAgentJob(
@@ -376,6 +400,7 @@ describe("phase 3 unit", () => {
           worktreePath: "D:/wt",
           preAgentSha: "aaa",
           agentExecutionId: "exec",
+          mode: "implement",
         },
       },
       {
@@ -391,11 +416,12 @@ describe("phase 3 unit", () => {
         enqueueSettle: async (payload) => settled.push(payload),
         startContainer: async () => {
           started += 1;
+          return { status: "finished" };
         },
         egressHosts: ["api.example.test"],
       }
     );
-    assert.equal(started, 0);
+    assert.equal(started, 1);
     assert.equal(settled[0].result.branch, "false");
 
     await assert.rejects(() =>

@@ -11,7 +11,7 @@ const engine = require("../src/services/executionengine");
 const git = require("../src/services/gitService");
 const github = require("../src/services/githubPrService");
 const lifecycle = require("../src/nodes/lifecycle");
-const { settleWait, enqueuePendingResumes, setResumeEnqueue } = require("../src/services/waitCompletion");
+const { settleWait, enqueuePendingResumes, failWaitingExternal, setResumeEnqueue } = require("../src/services/waitCompletion");
 const { setAgentEnqueue } = require("../src/services/cursorAgentService");
 const { setPlaywrightEnqueue } = require("../src/services/playwrightService");
 const { prepareExternalSettle } = require("../src/services/externalSettle");
@@ -375,5 +375,65 @@ describe("phase 3 lifecycle", () => {
       (err) => err.statusCode === 401
     );
     assert.equal(enqueued, 0);
+  });
+
+  test("prepareExternalSettle honors a finished agent-error instead of throwing start", async () => {
+    const sha = await git.revParse(repo);
+    const prepared = await prepareExternalSettle({
+      kind: "agent",
+      mode: "implement",
+      worktreePath: repo,
+      preAgentSha: sha,
+      result: { branch: "false", reason: "agent-error" },
+    });
+    assert.equal(prepared.result.branch, "false");
+    assert.equal(prepared.result.reason, "agent-error");
+  });
+
+  test("prepareExternalSettle still waits when the agent job has not decided", async () => {
+    const sha = await git.revParse(repo);
+    await assert.rejects(
+      () =>
+        prepareExternalSettle({
+          kind: "agent",
+          mode: "implement",
+          worktreePath: repo,
+          preAgentSha: sha,
+          result: {},
+        }),
+      /agent settle is not ready/
+    );
+  });
+
+  test("failWaitingExternal marks a parked agent wait failed so Retry works", async () => {
+    const runId = new mongoose.Types.ObjectId();
+    const nodeId = "agentImpl";
+    const externalJobId = `agent-${String(runId)}-${nodeId}`;
+    await Run.create({
+      _id: runId,
+      workflowId: new mongoose.Types.ObjectId(),
+      jobId: `fail-wait-${String(runId)}`,
+      status: "waiting",
+      currentNodeId: nodeId,
+      wait: {
+        kind: "agent",
+        nodeId,
+        state: "pending",
+        externalJobId,
+        resumeJobId: `resume-${externalJobId}`,
+      },
+    });
+    const outcome = await failWaitingExternal({
+      runId,
+      kind: "agent",
+      nodeId,
+      externalJobId,
+      error: new Error("agent settle is not ready"),
+    });
+    assert.equal(outcome.matched, true);
+    assert.equal(outcome.run.status, "failed");
+    const stored = await Run.findById(runId);
+    assert.equal(stored.status, "failed");
+    assert.equal(stored.logs[stored.logs.length - 1].error, "agent settle is not ready");
   });
 });

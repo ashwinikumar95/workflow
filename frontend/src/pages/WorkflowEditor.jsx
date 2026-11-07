@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   ReactFlow,
   Background,
@@ -71,6 +71,17 @@ const nodeTypes = {
 
 const branchNodeTypes = new Set(['approval', 'cursorAgent', 'playwright', 'condition', 'rulesChecks'])
 
+function identityFromTrigger(trigger) {
+  const config = trigger && trigger.config && typeof trigger.config === 'object' ? trigger.config : {}
+  const identity = {}
+  if (typeof config.seedKey === 'string' && config.seedKey) identity.seedKey = config.seedKey
+  if (typeof config.intake === 'string' && config.intake) identity.intake = config.intake
+  if (Array.isArray(config.profileKeys) && config.profileKeys.length) {
+    identity.profileKeys = config.profileKeys.filter((key) => typeof key === 'string' && key)
+  }
+  return identity
+}
+
 function parseBodyJson(text) {
   const t = text.trim()
   if (!t) return {}
@@ -83,6 +94,7 @@ function parseBodyJson(text) {
 
 export default function WorkflowEditor() {
   const { id } = useParams()
+  const navigate = useNavigate()
   const [name, setName] = useState('Workflow')
   const [status, setStatus] = useState('draft')
   const [triggerType, setTriggerType] = useState('webhook')
@@ -94,6 +106,7 @@ export default function WorkflowEditor() {
   const [cronAdvancedExpr, setCronAdvancedExpr] = useState('')
   const [triggersEnabled, setTriggersEnabled] = useState(true)
   const [webhookProvider, setWebhookProvider] = useState('generic')
+  const [triggerIdentity, setTriggerIdentity] = useState({})
   const [repoLocation, setRepoLocation] = useState('')
   const [repoBranch, setRepoBranch] = useState('main')
   const [repoCredentialRef, setRepoCredentialRef] = useState('GITHUB_TOKEN')
@@ -124,6 +137,7 @@ export default function WorkflowEditor() {
     const { data } = await workflowApi.get(id)
     setName(data.name || 'Workflow')
     setStatus(data.status || 'draft')
+    setTriggerIdentity(identityFromTrigger(data.trigger))
     const tt = data.trigger?.type
     if (tt === 'cron') {
       setTriggerType('cron')
@@ -347,8 +361,9 @@ export default function WorkflowEditor() {
   }
 
   function buildTriggerPayload() {
+    const identity = triggerIdentity && typeof triggerIdentity === 'object' ? triggerIdentity : {}
     if (triggerType === 'webhook') {
-      const config = {}
+      const config = { ...identity }
       if (webhookProvider === 'jira') config.provider = 'jira'
       if (webhookSecret.trim()) config.secret = webhookSecret.trim()
       else if (webhookSecretSet) config.secretSet = true
@@ -360,7 +375,7 @@ export default function WorkflowEditor() {
     return {
       type: 'cron',
       enabled: triggersEnabled,
-      config: { cron },
+      config: { ...identity, cron },
     }
   }
 
@@ -405,6 +420,12 @@ export default function WorkflowEditor() {
     }
   }
 
+  function openRun(runId) {
+    if (!runId) return false
+    navigate(`/workflows/${id}/runs/${runId}`)
+    return true
+  }
+
   async function handleRunNow() {
     setStarting(true)
     setError('')
@@ -413,6 +434,7 @@ export default function WorkflowEditor() {
       const issue = jiraIssue.trim()
       if (issue) {
         const { data } = await jiraApi.run(issue)
+        if (openRun(data.runId)) return
         setMessage(`Queued — ${data.jiraKey} run ${data.runId}`)
       } else {
         const { data } = await workflowApi.start(id, {})
@@ -420,7 +442,14 @@ export default function WorkflowEditor() {
       }
       setTimeout(() => setMessage(''), 4000)
     } catch (err) {
-      setError(err.response?.data?.error || err.message || 'Start failed')
+      const data = err.response?.data
+      if (err.response?.status === 409 && data?.runId) {
+        setError(
+          `${data.error || 'A live run already exists for this ticket'}. Open the current run from Runs, or cancel it first.`
+        )
+        return
+      }
+      setError(data?.error || err.message || 'Start failed')
     } finally {
       setStarting(false)
     }
@@ -989,10 +1018,13 @@ export default function WorkflowEditor() {
                     disabled={starting}
                   />
                 </label>
+                {error ? <div className="alert alert-error">{error}</div> : null}
+                {message ? <div className="alert alert-success">{message}</div> : null}
                 <p className="muted small">
                   While paused, incoming webhooks and cron are rejected. Run now needs an active (non-paused)
                   workflow. Paste a Jira link or key to run that ticket; leave it empty to start this workflow
-                  with no input.
+                  with no input. If that ticket already has a live run, Run now opens it instead of starting a
+                  second one.
                 </p>
               </div>
 

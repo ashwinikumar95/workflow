@@ -164,6 +164,20 @@ describe("jira-pr phase 9 templates, PRs and commit guard", () => {
     assert.equal(check.ok, true, check.message);
   });
 
+  test("failure jira stops comment without moving the ticket off In Progress", () => {
+    const graph = buildProjectWorkflow(stubProfile(), stubLinked());
+    const stops = graph.nodes.filter(
+      (node) => node.type === "jiraUpdate" && node.id !== "claim" && node.id !== "jiraReview"
+    );
+    assert.ok(stops.length > 0);
+    for (const node of stops) {
+      assert.equal(node.config.transition, undefined, node.id);
+      assert.ok(String(node.config.comment || "").trim(), node.id);
+    }
+    assert.equal(graph.nodes.find((node) => node.id === "claim").config.transition, "claim");
+    assert.equal(graph.nodes.find((node) => node.id === "jiraReview").config.transition, "review");
+  });
+
   test("MF profile generates a valid published graph", () => {
     const profiles = parseProfiles();
     const graph = buildProjectWorkflow(profiles.MF, profiles.QUT);

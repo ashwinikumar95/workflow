@@ -1,6 +1,18 @@
 const crypto = require("crypto");
 const axios = require("axios");
 const config = require("../../config");
+const {
+  MAX_HOPS,
+  alreadyInStatus,
+  resolveStatusName,
+  matchTransition,
+  findTransitionPath,
+  parseWorkflowPayload,
+  fillRequiredFields,
+  missingFieldsFromError,
+  formatOffered,
+  formatHops,
+} = require("./jiraTransition");
 
 const ISSUE_KEY = /^[A-Z][A-Z0-9]+-\d+$/;
 const SUMMARY_TAG = /\[@[A-Z][A-Z0-9]*-\d+(?:-\d+)*\]/gi;
@@ -9,6 +21,7 @@ const SEARCH_FIELDS = [
   "description",
   "status",
   "issuetype",
+  "project",
   "labels",
   "components",
   "updated",
@@ -149,7 +162,11 @@ function normalizeIssue(data, fallbackKey) {
     summary,
     descriptionText,
     status,
+    statusId: fields.status && fields.status.id != null ? String(fields.status.id) : "",
     issueType,
+    issueTypeId: fields.issuetype && fields.issuetype.id != null ? String(fields.issuetype.id) : "",
+    projectId: fields.project && fields.project.id != null ? String(fields.project.id) : "",
+    projectKey: fields.project && fields.project.key != null ? String(fields.project.key) : "",
     labels: asStringArray(fields.labels),
     components: asStringArray(fields.components),
     acceptanceCriteria,
@@ -296,6 +313,16 @@ async function searchIssues(jql, deps = {}) {
   return issues;
 }
 
+function mapTransition(item) {
+  return {
+    id: item && item.id != null ? String(item.id) : "",
+    name: item && item.name != null ? String(item.name) : "",
+    to: item && item.to && item.to.name != null ? String(item.to.name) : "",
+    toId: item && item.to && item.to.id != null ? String(item.to.id) : "",
+    fields: item && item.fields && typeof item.fields === "object" ? item.fields : {},
+  };
+}
+
 /**
  * @param {string} issueKey
  * @param {{ http?: { get: Function }, sleep?: Function, attempts?: number }} [deps]
@@ -305,27 +332,15 @@ async function getTransitions(issueKey, deps = {}) {
   const http = httpClient(deps);
   const res = await withRetry(
     () =>
-      http.get(`${jiraBase()}/rest/api/3/issue/${encodeURIComponent(issueKey)}/transitions`, requestOptions()),
+      http.get(`${jiraBase()}/rest/api/3/issue/${encodeURIComponent(issueKey)}/transitions`, {
+        ...requestOptions(),
+        params: { expand: "transitions.fields" },
+      }),
     deps
   );
   const data = res && res.data ? res.data : {};
   const list = Array.isArray(data.transitions) ? data.transitions : [];
-  return list.map((item) => ({
-    id: item && item.id != null ? String(item.id) : "",
-    name: item && item.name != null ? String(item.name) : "",
-    to: item && item.to && item.to.name != null ? String(item.to.name) : "",
-  }));
-}
-
-function matchTransition(transitions, statusName) {
-  const want = String(statusName || "").trim().toLowerCase();
-  if (!want) return null;
-  const list = Array.isArray(transitions) ? transitions : [];
-  return (
-    list.find((item) => item.to && item.to.toLowerCase() === want) ||
-    list.find((item) => item.name && item.name.toLowerCase() === want) ||
-    null
-  );
+  return list.map(mapTransition);
 }
 
 async function listCommentTexts(issueKey, deps = {}) {
@@ -384,10 +399,230 @@ async function addComment(issueKey, text, marker, deps = {}) {
   return { ok: true, posted: true };
 }
 
+const workflowCache = new Map();
+let myselfCache = null;
+
+function clearWorkflowCache() {
+  workflowCache.clear();
+  myselfCache = null;
+}
+
+function isHttpStatus(err, status) {
+  return Boolean(err && err.response && err.response.status === status);
+}
+
+async function getMyself(deps = {}) {
+  if (myselfCache && !deps.skipCache) return myselfCache;
+  const http = httpClient(deps);
+  try {
+    const res = await withRetry(() => http.get(`${jiraBase()}/rest/api/3/myself`, requestOptions()), deps);
+    const data = res && res.data ? res.data : {};
+    myselfCache = {
+      accountId: data.accountId != null ? String(data.accountId) : "",
+      emailAddress: data.emailAddress != null ? String(data.emailAddress) : "",
+    };
+    return myselfCache;
+  } catch {
+    return { accountId: "", emailAddress: "" };
+  }
+}
+
+async function getEditMeta(issueKey, deps = {}) {
+  assertIssueKey(issueKey);
+  const http = httpClient(deps);
+  try {
+    const res = await withRetry(
+      () =>
+        http.get(`${jiraBase()}/rest/api/3/issue/${encodeURIComponent(issueKey)}/editmeta`, requestOptions()),
+      deps
+    );
+    const data = res && res.data ? res.data : {};
+    return data.fields && typeof data.fields === "object" ? data.fields : {};
+  } catch (err) {
+    if (isHttpStatus(err, 404) || isHttpStatus(err, 400)) return {};
+    throw err;
+  }
+}
+
+/**
+ * @param {string} issueKey
+ * @param {object} fields
+ * @param {{ http?: { put: Function }, sleep?: Function, attempts?: number }} [deps]
+ */
+async function updateIssueFields(issueKey, fields, deps = {}) {
+  assertIssueKey(issueKey);
+  if (!fields || typeof fields !== "object" || !Object.keys(fields).length) {
+    return { ok: true, updated: false };
+  }
+  const http = httpClient(deps);
+  await withRetry(
+    () =>
+      http.put(
+        `${jiraBase()}/rest/api/3/issue/${encodeURIComponent(issueKey)}`,
+        { fields },
+        requestOptions()
+      ),
+    deps
+  );
+  return { ok: true, updated: true };
+}
+
+async function getIssueWorkflow(issueKey, deps = {}) {
+  assertIssueKey(issueKey);
+  const issue = deps.issue && typeof deps.issue === "object" ? deps.issue : await fetchIssue(issueKey, deps);
+  const cacheKey = issue.projectId && issue.issueTypeId ? `${issue.projectId}::${issue.issueTypeId}` : "";
+  if (cacheKey && !deps.skipCache && workflowCache.has(cacheKey)) {
+    return workflowCache.get(cacheKey);
+  }
+
+  const http = httpClient(deps);
+  let graph = { statuses: [], transitions: [] };
+
+  try {
+    const res = await withRetry(
+      () =>
+        http.post(
+          `${jiraBase()}/rest/api/3/workflows`,
+          {
+            projectAndIssueTypes: [
+              {
+                projectId: issue.projectId || undefined,
+                issueTypeId: issue.issueTypeId || undefined,
+              },
+            ],
+          },
+          requestOptions()
+        ),
+      deps
+    );
+    graph = parseWorkflowPayload(res && res.data ? res.data : {});
+  } catch (err) {
+    if (err && !err.response) {
+      graph = { statuses: [], transitions: [] };
+    } else {
+      try {
+        const res = await withRetry(
+          () =>
+            http.get(`${jiraBase()}/rest/api/3/workflow/search`, {
+              ...requestOptions(),
+              params: { expand: "transitions,statuses", maxResults: 100 },
+            }),
+          deps
+        );
+        graph = parseWorkflowPayload(res && res.data ? res.data : {});
+      } catch {
+        graph = { statuses: [], transitions: [] };
+      }
+    }
+  }
+
+  if (cacheKey) workflowCache.set(cacheKey, graph);
+  return graph;
+}
+
+function transitionPayload(match, fields, needsComment, deps) {
+  const payload = { transition: { id: match.id } };
+  if (fields && Object.keys(fields).length) payload.fields = fields;
+  if (needsComment) {
+    const text = [deps.commentText || deps.reason || `Transition to ${match.to}`, deps.marker]
+      .filter(Boolean)
+      .join("\n");
+    payload.update = { comment: [{ add: { body: commentBody(text) } }] };
+  }
+  return payload;
+}
+
+async function postTransition(issueKey, match, filled, deps) {
+  const http = httpClient(deps);
+  let fields = { ...(filled.fields || {}) };
+  let needsComment = Boolean(filled.needsComment);
+  const post = (body) =>
+    withRetry(
+      () =>
+        http.post(
+          `${jiraBase()}/rest/api/3/issue/${encodeURIComponent(issueKey)}/transitions`,
+          body,
+          requestOptions()
+        ),
+      deps
+    );
+
+  try {
+    await post(transitionPayload(match, fields, needsComment, deps));
+    return { ok: true, fields };
+  } catch (err) {
+    if (!isHttpStatus(err, 400)) throw err;
+    const names = missingFieldsFromError(err);
+    if (!names.length) throw err;
+    const schema = {};
+    for (const name of names) {
+      schema[name] =
+        match.fields && match.fields[name]
+          ? match.fields[name]
+          : { required: true, schema: { type: "string" } };
+    }
+    const extra = fillRequiredFields(schema, deps);
+    fields = { ...fields, ...extra.fields };
+    needsComment = needsComment || extra.needsComment || names.includes("comment");
+    const stillMissing = extra.missing.filter((name) => fields[name] == null && name !== "comment");
+    if (stillMissing.length) {
+      return { ok: false, missing: stillMissing, fields };
+    }
+    await post(transitionPayload(match, fields, needsComment, deps));
+    return { ok: true, retried: true, fields };
+  }
+}
+
+async function maybeUnlockHop(issueKey, deps) {
+  const overlay =
+    deps.transitionFields && typeof deps.transitionFields === "object" ? deps.transitionFields : {};
+  let editmeta = {};
+  try {
+    editmeta = await getEditMeta(issueKey, deps);
+  } catch {
+    editmeta = {};
+  }
+  const toPut = {};
+  for (const [key, value] of Object.entries(overlay)) {
+    toPut[key] = value;
+  }
+  const filled = fillRequiredFields(editmeta, { ...deps, transitionFields: overlay });
+  for (const [key, value] of Object.entries(filled.fields || {})) {
+    if (toPut[key] == null) toPut[key] = value;
+  }
+  if (!Object.keys(toPut).length) return { updated: false, missing: filled.missing };
+  await updateIssueFields(issueKey, toPut, deps);
+  return { updated: true, missing: filled.missing, fields: toPut };
+}
+
+async function commentFailure(issueKey, lines, deps, extra = {}) {
+  const commentOnMissing = deps.commentOnMissing !== false;
+  if (!commentOnMissing) {
+    return { ok: false, commented: false, ...extra };
+  }
+  const mark = typeof deps.marker === "string" ? deps.marker.trim() : "";
+  const text = [...lines, mark].filter(Boolean).join("\n");
+  const comment = await addComment(issueKey, text, mark, deps);
+  return { ok: false, commented: Boolean(comment && comment.posted), ...extra };
+}
+
+async function resolveHop(issueKey, dest, statuses, deps) {
+  let offered = await getTransitions(issueKey, deps);
+  let match = matchTransition(offered, dest, statuses);
+  if (match && match.id) return { match, offered };
+  const unlocked = await maybeUnlockHop(issueKey, deps);
+  if (unlocked.updated) {
+    offered = await getTransitions(issueKey, deps);
+    match = matchTransition(offered, dest, statuses);
+    if (match && match.id) return { match, offered, unlocked: true };
+  }
+  return { match: null, offered };
+}
+
 /**
  * @param {string} issueKey
  * @param {string} statusName
- * @param {{ http?: object, sleep?: Function, attempts?: number, marker?: string, commentOnMissing?: boolean, currentStatus?: string }} [deps]
+ * @param {{ http?: object, sleep?: Function, attempts?: number, marker?: string, commentOnMissing?: boolean, commentText?: string, reason?: string, transitionFields?: object, preferredStatuses?: string[] }} [deps]
  */
 async function transitionIssue(issueKey, statusName, deps = {}) {
   assertIssueKey(issueKey);
@@ -399,39 +634,128 @@ async function transitionIssue(issueKey, statusName, deps = {}) {
   }
 
   const issue = await fetchIssue(issueKey, deps);
-  if (issue.status && issue.status.toLowerCase() === target.toLowerCase()) {
-    return { ok: true, reason: "already_in_status" };
+  let workflow = { statuses: [], transitions: [] };
+  try {
+    workflow = await getIssueWorkflow(issueKey, { ...deps, issue });
+  } catch {
+    workflow = { statuses: [], transitions: [] };
+  }
+  const statuses = workflow.statuses || [];
+  const resolvedTarget = resolveStatusName(target, statuses) || target;
+
+  if (alreadyInStatus(issue.status, resolvedTarget, statuses) || alreadyInStatus(issue.status, target, statuses)) {
+    return { ok: true, reason: "already_in_status", hops: [] };
   }
 
-  const transitions = await getTransitions(issueKey, deps);
-  const match = matchTransition(transitions, target);
-  if (!match || !match.id) {
-    const commentOnMissing = deps.commentOnMissing !== false;
-    if (commentOnMissing) {
-      const mark = typeof deps.marker === "string" ? deps.marker.trim() : "";
-      const text = [
+  const myself = await getMyself(deps);
+  const fillDeps = { ...deps, myself };
+  const preferred = Array.isArray(deps.preferredStatuses) ? deps.preferredStatuses : [];
+  const hops = [];
+  const seen = new Set();
+  let current = issue.status;
+  seen.add(String(current || "").toLowerCase());
+
+  let path = [];
+  const offeredStart = await getTransitions(issueKey, deps);
+  const direct = matchTransition(offeredStart, resolvedTarget, statuses);
+  if (direct && direct.id) {
+    path = [{ id: direct.id, name: direct.name, to: direct.to || resolvedTarget, from: current }];
+  } else if (workflow.transitions && workflow.transitions.length) {
+    path = findTransitionPath(workflow, current, resolvedTarget, { preferredStatuses: preferred });
+  }
+
+  if (!path.length) {
+    return commentFailure(
+      issueKey,
+      [
         `Could not transition ${issueKey} to "${target}": that transition is not offered.`,
-        mark,
-      ]
-        .filter(Boolean)
-        .join("\n");
-      const comment = await addComment(issueKey, text, mark, deps);
-      return { ok: false, reason: "not_offered", commented: Boolean(comment && comment.posted) };
-    }
-    return { ok: false, reason: "not_offered", commented: false };
+        offeredStart.length ? `Offered: ${formatOffered(offeredStart)}` : "",
+      ],
+      deps,
+      { reason: "not_offered", hops, offered: offeredStart }
+    );
+  }
+  if (path.length > MAX_HOPS) {
+    return commentFailure(
+      issueKey,
+      [
+        `Could not transition ${issueKey} to "${target}": path is longer than ${MAX_HOPS} hops.`,
+        `Offered: ${formatOffered(offeredStart)}`,
+      ],
+      deps,
+      { reason: "not_offered", hops, offered: offeredStart }
+    );
   }
 
-  const http = httpClient(deps);
-  await withRetry(
-    () =>
-      http.post(
-        `${jiraBase()}/rest/api/3/issue/${encodeURIComponent(issueKey)}/transitions`,
-        { transition: { id: match.id } },
-        requestOptions()
-      ),
-    deps
-  );
-  return { ok: true, reason: "transitioned", id: match.id };
+  for (const step of path) {
+    const dest = step.to || resolvedTarget;
+    if (alreadyInStatus(current, dest, statuses)) continue;
+    const { match, offered } = await resolveHop(issueKey, dest, statuses, fillDeps);
+    if (!match || !match.id) {
+      return commentFailure(
+        issueKey,
+        [
+          `Could not transition ${issueKey} to "${target}": that transition is not offered.`,
+          offered.length ? `Offered: ${formatOffered(offered)}` : "",
+          hops.length ? `Attempted: ${current}${hops.length ? ` → ${formatHops(hops)}` : ""}` : "",
+        ],
+        deps,
+        { reason: "not_offered", hops, offered }
+      );
+    }
+
+    const filled = fillRequiredFields(match.fields, fillDeps);
+    if (filled.missing.length) {
+      return commentFailure(
+        issueKey,
+        [
+          `Could not transition ${issueKey} to "${match.to || dest}": missing required fields ${filled.missing.join(", ")}.`,
+          hops.length ? `Attempted: ${formatHops(hops)}` : "",
+        ],
+        deps,
+        { reason: "missing_fields", hops, missing: filled.missing }
+      );
+    }
+
+    const posted = await postTransition(issueKey, match, filled, fillDeps);
+    if (!posted.ok) {
+      return commentFailure(
+        issueKey,
+        [
+          `Could not transition ${issueKey} to "${match.to || dest}": missing required fields ${(posted.missing || []).join(", ")}.`,
+          hops.length ? `Attempted: ${formatHops(hops)}` : "",
+        ],
+        deps,
+        { reason: "missing_fields", hops, missing: posted.missing }
+      );
+    }
+
+    hops.push({ id: match.id, name: match.name, to: match.to || dest });
+    current = match.to || dest;
+    const key = String(current || "").toLowerCase();
+    if (seen.has(key)) break;
+    seen.add(key);
+  }
+
+  if (!alreadyInStatus(current, resolvedTarget, statuses) && !alreadyInStatus(current, target, statuses)) {
+    return commentFailure(
+      issueKey,
+      [
+        `Could not transition ${issueKey} to "${target}": that transition is not offered.`,
+        hops.length ? `Attempted: ${formatHops(hops)}` : "",
+      ],
+      deps,
+      { reason: "not_offered", hops }
+    );
+  }
+
+  const last = hops[hops.length - 1];
+  return {
+    ok: true,
+    reason: "transitioned",
+    id: last ? last.id : undefined,
+    hops,
+  };
 }
 
 module.exports = {
@@ -442,8 +766,12 @@ module.exports = {
   searchIssues,
   searchIssuesDetailed,
   getTransitions,
+  getIssueWorkflow,
+  getEditMeta,
+  updateIssueFields,
   transitionIssue,
   addComment,
+  clearWorkflowCache,
   adfToText,
   parseIssueRef,
   contentFingerprint,

@@ -18,6 +18,13 @@ const profileSchema = z.object({
     review: z.string().min(1),
     blocked: z.string().min(1),
   }),
+  transitionFields: z
+    .object({
+      claim: z.record(z.string(), z.unknown()).optional(),
+      review: z.record(z.string(), z.unknown()).optional(),
+      blocked: z.record(z.string(), z.unknown()).optional(),
+    })
+    .optional(),
   repo: z.object({
     location: z.string().min(1),
     defaultBranch: z.string().min(1),
@@ -37,6 +44,16 @@ const profileSchema = z.object({
   rules: z.object({
     forceInclude: z.array(z.string()),
     extraDocs: z.array(z.string()),
+    topicIncludes: z
+      .array(
+        z.object({
+          id: z.string().min(1).optional(),
+          when: z.array(z.string().min(1)).min(1),
+          files: z.array(z.string().min(1)).min(1),
+        })
+      )
+      .optional()
+      .default([]),
   }),
   moduleMap: z.object({
     rules: z.array(

@@ -250,6 +250,66 @@ function buildManifest(options = {}) {
   return packManifest(selected, options.budget == null ? RULES_INLINE_BUDGET : options.budget);
 }
 
+function phraseInText(text, phrase) {
+  const haystack = String(text || "").toLowerCase();
+  const needle = String(phrase || "").trim().toLowerCase();
+  if (!needle) return false;
+  let from = 0;
+  while (from < haystack.length) {
+    const at = haystack.indexOf(needle, from);
+    if (at < 0) return false;
+    const before = at === 0 ? "" : haystack[at - 1];
+    const after = haystack[at + needle.length] || "";
+    const boundaryBefore = !before || !/[a-z0-9]/i.test(before);
+    const boundaryAfter = !after || !/[a-z0-9]/i.test(after);
+    if (boundaryBefore && boundaryAfter) return true;
+    from = at + 1;
+  }
+  return false;
+}
+
+function filesForTopics(topicIncludes, issue) {
+  const summary = issue && issue.summary ? String(issue.summary) : "";
+  const description = issue && issue.descriptionText ? String(issue.descriptionText) : "";
+  const text = `${summary}\n${description}`;
+  if (!text.trim()) return [];
+  const files = [];
+  const seen = new Set();
+  for (const topic of Array.isArray(topicIncludes) ? topicIncludes : []) {
+    const when = Array.isArray(topic && topic.when) ? topic.when : [];
+    if (!when.some((phrase) => phraseInText(text, phrase))) continue;
+    for (const file of (topic && topic.files) || []) {
+      const rel = posix(file);
+      if (!rel || seen.has(rel)) continue;
+      seen.add(rel);
+      files.push(rel);
+    }
+  }
+  return files;
+}
+
+function rulesMentionedInTicket(issue, repoRoot) {
+  const summary = issue && issue.summary ? String(issue.summary) : "";
+  const description = issue && issue.descriptionText ? String(issue.descriptionText) : "";
+  const text = `${summary}\n${description}`;
+  if (!text.trim() || !repoRoot) return [];
+  const files = listRuleFiles(repoRoot);
+  const mentioned = [];
+  for (const file of files) {
+    const rel = file.rel;
+    const base = path.basename(rel);
+    const stem = base.replace(/\.(mdc|md)$/i, "");
+    const pattern = new RegExp(
+      `(?:^|[^A-Za-z0-9_-])${escapeRegex(stem)}(?:\\.(?:mdc|md))?(?:[^A-Za-z0-9_-]|$)`,
+      "i"
+    );
+    if (text.includes(rel) || text.includes(base) || pattern.test(text)) {
+      mentioned.push(rel);
+    }
+  }
+  return mentioned;
+}
+
 function formatRulesSection(manifest) {
   const rules = manifest && Array.isArray(manifest.rules) ? manifest.rules : [];
   const lines = [
@@ -281,4 +341,6 @@ module.exports = {
   packManifest,
   buildManifest,
   formatRulesSection,
+  filesForTopics,
+  rulesMentionedInTicket,
 };
