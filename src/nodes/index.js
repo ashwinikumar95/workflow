@@ -114,7 +114,9 @@ async function executeNode(node, input, runState) {
                 approvedAt: stored.decidedAt,
               }
             : base.planApproval;
-        return { ...base, branch, planApproval };
+        const clarifications =
+          stored && Array.isArray(stored.clarifications) ? stored.clarifications : base.clarifications;
+        return { ...base, branch, planApproval, clarifications };
       }
       return { control: "wait", kind: "approval", output: input };
     }

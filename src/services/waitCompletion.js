@@ -102,6 +102,9 @@ async function completeExternalWait({
     if (approval.fingerprint) setDoc.approval.fingerprint = String(approval.fingerprint);
     if (approval.expiresAt) setDoc.approval.expiresAt = String(approval.expiresAt);
     if (approval.baseSha) setDoc.approval.baseSha = String(approval.baseSha);
+    if (Array.isArray(approval.clarifications) && approval.clarifications.length) {
+      setDoc.approval.clarifications = approval.clarifications;
+    }
   }
 
   const stages = [

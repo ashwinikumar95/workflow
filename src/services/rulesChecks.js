@@ -104,31 +104,101 @@ function runMechanicalChecks({ files, checks } = {}) {
   };
 }
 
+function textOf(item, keys) {
+  if (!item || typeof item !== "object") return "";
+  for (const key of keys) {
+    const value = item[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+function severityOf(item) {
+  const severity = item && item.severity;
+  return severity === "high" || severity === "medium" || severity === "low" ? severity : "medium";
+}
+
+function locationFrom(item) {
+  const explicitFile = textOf(item, ["file"]);
+  const explicitLine = item && Number.isInteger(item.line) && item.line >= 0 ? item.line : undefined;
+  const blob = [item && item.evidence, item && item.finding, item && item.detail].filter(Boolean).join("\n");
+  const withLine = blob.match(/([A-Za-z0-9_./\\-]+\.[A-Za-z0-9]+):(\d+)/);
+  const fileOnly = blob.match(/([A-Za-z0-9_./\\-]+\.(?:vue|js|jsx|ts|tsx|json|md|css|scss))/);
+  const file = explicitFile || (withLine && withLine[1].replace(/\\/g, "/")) || (fileOnly && fileOnly[1].replace(/\\/g, "/")) || "";
+  const line = explicitLine !== undefined ? explicitLine : withLine ? Number(withLine[2]) : undefined;
+  return { file, line };
+}
+
+function potentialItem(item, extra = {}) {
+  const located = locationFrom(item);
+  const row = {
+    rule: textOf(item, ["rule"]) || "unspecified",
+    detail: textOf(item, ["detail", "finding", "message", "description"]) || extra.detail || "Missing detail",
+    severity: severityOf(item),
+    whatWouldConfirm: textOf(item, ["whatWouldConfirm"]) || extra.whatWouldConfirm || "Quote the matching diff line as evidence",
+  };
+  const file = located.file;
+  if (file) row.file = file;
+  if (located.line !== undefined) row.line = located.line;
+  const evidence = textOf(item, ["evidence"]);
+  if (evidence) row.evidence = evidence;
+  return row;
+}
+
+function coerceConfirmed(item) {
+  const evidence = textOf(item, ["evidence"]);
+  const located = locationFrom(item);
+  const detail = textOf(item, ["detail", "finding", "message", "description"]);
+  if (!evidence || !located.file || located.line === undefined) {
+    return {
+      bucket: "potential",
+      item: potentialItem(item, {
+        detail: detail || "Missing quoted evidence",
+        whatWouldConfirm: "Quote the matching diff line as evidence",
+      }),
+    };
+  }
+  return {
+    bucket: "confirmed",
+    item: {
+      rule: textOf(item, ["rule"]) || "unspecified",
+      file: located.file,
+      line: located.line,
+      detail: detail || "Missing detail",
+      severity: severityOf(item),
+      evidence,
+    },
+  };
+}
+
+function coerceUncertainty(item) {
+  if (typeof item === "string" && item.trim()) return { rule: "unspecified", question: item.trim() };
+  if (!item || typeof item !== "object") return null;
+  const question = textOf(item, ["question", "finding", "detail", "message"]);
+  if (!question) return null;
+  return { rule: textOf(item, ["rule"]) || "unspecified", question };
+}
+
 function normalizeReview(raw) {
   const input = raw && typeof raw === "object" ? raw : {};
   const confirmed = [];
-  const potential = Array.isArray(input.potential) ? input.potential.slice() : [];
-  const sourceConfirmed = Array.isArray(input.confirmed) ? input.confirmed : [];
-  for (const item of sourceConfirmed) {
+  const potential = [];
+  for (const item of Array.isArray(input.confirmed) ? input.confirmed : []) {
     if (!item || typeof item !== "object") continue;
-    if (typeof item.evidence === "string" && item.evidence.trim()) {
-      confirmed.push(item);
-    } else {
-      potential.push({
-        rule: item.rule,
-        file: item.file,
-        line: item.line || 0,
-        detail: item.detail || "Missing quoted evidence",
-        severity: item.severity || "medium",
-        whatWouldConfirm: "Quote the matching diff line as evidence",
-      });
-    }
+    const coerced = coerceConfirmed(item);
+    if (coerced.bucket === "confirmed") confirmed.push(coerced.item);
+    else potential.push(coerced.item);
   }
-  const candidate = {
-    confirmed,
-    potential,
-    uncertainties: Array.isArray(input.uncertainties) ? input.uncertainties : [],
-  };
+  for (const item of Array.isArray(input.potential) ? input.potential : []) {
+    if (!item || typeof item !== "object") continue;
+    potential.push(potentialItem(item));
+  }
+  const uncertainties = [];
+  for (const item of Array.isArray(input.uncertainties) ? input.uncertainties : []) {
+    const coerced = coerceUncertainty(item);
+    if (coerced) uncertainties.push(coerced);
+  }
+  const candidate = { confirmed, potential, uncertainties };
   const checked = reviewSchema.safeParse(candidate);
   if (!checked.success) return { ok: false, reason: "schema", value: candidate };
   return { ok: true, value: checked.data };

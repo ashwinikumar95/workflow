@@ -91,6 +91,7 @@ exports.decideRun = async (req, res) => {
 
     const outcome = await recordDecision(run._id, req.body && req.body.decision, req.user.id, {
       planHash: req.body && req.body.planHash,
+      answers: req.body && req.body.answers,
     });
     if (outcome.http === 200) {
       return res.status(200).json(redactRunForResponse(outcome.run));

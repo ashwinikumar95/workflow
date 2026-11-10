@@ -155,7 +155,7 @@ function addCommonStops(nodes, edges, spec) {
     nodes,
     edges,
     spec.stops.agent,
-    notify("notifyAgentFailed", "gate_failed", "Stopped: implementation did not produce a clean commit", "implementing"),
+    notify("notifyAgentFailed", "gate_failed", "Stopped: {{stopDetail}}", "implementing"),
     jiraStop("jiraAgentFailed"),
     2,
     6
@@ -375,8 +375,54 @@ function addVerifyLoop({
 
     edge(edges, previous, rulesId, "true");
     edge(edges, rulesId, reviewPromptId, "true");
+    const reviewBadId = `${idPrefix}${n}_reviewBad`;
+    const reviewPrompt2Id = `${idPrefix}${n}_rprompt2`;
+    const review2Id = `${idPrefix}${n}_review2`;
+    const reviewBad2Id = `${idPrefix}${n}_reviewBad2`;
+    add(nodes, {
+      id: reviewBadId,
+      type: "condition",
+      config: {
+        title: "Invalid review",
+        field: "reason",
+        operator: "equals",
+        value: "invalid_review",
+        ...ui(col, 1.5),
+      },
+    });
+    add(nodes, {
+      id: reviewPrompt2Id,
+      type: "cursorPrompt",
+      config: { ...promptConfig("review", { role, reviewRetry: true }), ...ui(col, 1.6) },
+    });
+    add(nodes, {
+      id: review2Id,
+      type: "cursorAgent",
+      config: {
+        ...agentConfig(editor, "review", { attempt: n + 1, maxFixAttempts: maxFix, role }),
+        ...ui(col, 1.8),
+      },
+    });
+    add(nodes, {
+      id: reviewBad2Id,
+      type: "condition",
+      config: {
+        title: "Invalid review again",
+        field: "reason",
+        operator: "equals",
+        value: "invalid_review",
+        ...ui(col, 1.9),
+      },
+    });
+
     edge(edges, reviewPromptId, reviewId);
     edge(edges, reviewId, selectId, "true");
+    edge(edges, reviewId, reviewBadId, "false");
+    edge(edges, reviewBadId, reviewPrompt2Id, "true");
+    edge(edges, reviewPrompt2Id, review2Id);
+    edge(edges, review2Id, selectId, "true");
+    edge(edges, review2Id, reviewBad2Id, "false");
+    edge(edges, reviewBad2Id, "notifyRules", "true");
     edge(edges, selectId, pwId);
     edge(edges, pwId, successId, "true");
     edge(edges, pwId, isEnvId, "false");
@@ -387,7 +433,8 @@ function addVerifyLoop({
 
     if (last) {
       edge(edges, rulesId, "notifyGate", "false");
-      edge(edges, reviewId, "notifyRules", "false");
+      edge(edges, reviewBadId, "notifyRules", "false");
+      edge(edges, reviewBad2Id, "notifyRules", "false");
       edge(edges, canFixId, "notifyPlaywright", "true");
       edge(edges, canFixId, "notifyPlaywright", "false");
     } else {
@@ -407,7 +454,8 @@ function addVerifyLoop({
         config: { ...agentConfig(editor, "fix", { role }), ...ui(col, 8) },
       });
       edge(edges, rulesId, fixPromptId, "false");
-      edge(edges, reviewId, fixPromptId, "false");
+      edge(edges, reviewBadId, fixPromptId, "false");
+      edge(edges, reviewBad2Id, fixPromptId, "false");
       edge(edges, canFixId, fixPromptId, "true");
       edge(edges, canFixId, "notifyPlaywright", "false");
       edge(edges, fixPromptId, fixAgentId);

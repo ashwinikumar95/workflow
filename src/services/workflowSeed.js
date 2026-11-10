@@ -74,10 +74,16 @@ async function seedDraftWorkflows(deps = {}) {
         plain.trigger && plain.trigger.config && typeof plain.trigger.config === "object"
           ? plain.trigger.config
           : {};
+      const graph = graphForSeed(seed, profiles);
       await WorkflowModel.updateOne(
         { _id: stripped._id },
         {
           $set: {
+            runtime: graph.runtime,
+            retention: graph.retention,
+            repository: graph.repository,
+            nodes: graph.nodes,
+            edges: graph.edges,
             "trigger.config": {
               ...prior,
               seedKey: seed.seedKey,
@@ -101,6 +107,19 @@ async function seedDraftWorkflows(deps = {}) {
       continue;
     }
     if (byKey) {
+      const graph = graphForSeed(seed, profiles);
+      await WorkflowModel.updateOne(
+        { _id: byKey._id },
+        {
+          $set: {
+            runtime: graph.runtime,
+            retention: graph.retention,
+            repository: graph.repository,
+            nodes: graph.nodes,
+            edges: graph.edges,
+          },
+        }
+      );
       kept.push({ seedKey: seed.seedKey, id: String(byKey._id), status: byKey.status });
       continue;
     }

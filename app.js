@@ -10,15 +10,6 @@ const authRoutes = require("./src/routes/authRoutes");
 const runRoutes = require("./src/routes/runRoutes");
 const jiraRoutes = require("./src/routes/jiraRoutes");
 
-require("./src/services/queue");
-if (config.workflowWorkerEnabled) {
-  require("./src/workers/worker");
-}
-if (config.schedulerEnabled) {
-  const { startScheduler } = require("./src/services/schedulerService");
-  startScheduler();
-}
-
 const app = express();
 
 app.use(cors());
@@ -41,6 +32,14 @@ mongoose
       await seedDraftWorkflows();
     } catch (err) {
       console.error("[workflow-seed] failed:", err && err.message ? err.message : err);
+    }
+    require("./src/services/queue");
+    if (config.workflowWorkerEnabled) {
+      require("./src/workers/worker");
+    }
+    if (config.schedulerEnabled) {
+      const { startScheduler } = require("./src/services/schedulerService");
+      startScheduler();
     }
     app.listen(config.port, () => {
       console.log(`Server listening on http://localhost:${config.port}`);

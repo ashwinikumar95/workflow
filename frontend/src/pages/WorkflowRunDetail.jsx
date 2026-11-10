@@ -97,6 +97,7 @@ export default function WorkflowRunDetail() {
   const [deciding, setDeciding] = useState(false)
   const [controlError, setControlError] = useState('')
   const [controlling, setControlling] = useState(false)
+  const [answers, setAnswers] = useState([])
 
   useEffect(() => {
     let cancelled = false
@@ -130,12 +131,24 @@ export default function WorkflowRunDetail() {
     return () => clearInterval(timer)
   }, [run?.status, runId])
 
+  const planQuestions =
+    run?.wait?.nodeId === 'approvePlan' && Array.isArray(run?.context?.plan?.questions)
+      ? run.context.plan.questions.filter((question) => typeof question === 'string' && question.trim())
+      : []
+  const questionKey = JSON.stringify(planQuestions)
+
+  useEffect(() => {
+    const list = JSON.parse(questionKey)
+    setAnswers(list.map(() => ''))
+  }, [run?._id, run?.wait?.nodeId, questionKey])
+
   async function decide(decision) {
     setDeciding(true)
     setDecisionError('')
     try {
       const planHash = typeof run?.context?.planHash === 'string' ? run.context.planHash : undefined
-      const { data } = await runApi.decide(runId, decision, planHash)
+      const answersToSend = decision === 'approved' && planQuestions.length ? answers : undefined
+      const { data } = await runApi.decide(runId, decision, planHash, answersToSend)
       setRun(data)
     } catch (err) {
       setDecisionError(err.response?.data?.error || err.message || 'Decision failed')
@@ -268,11 +281,35 @@ export default function WorkflowRunDetail() {
           {!plan && !prompt && !resuming ? (
             <p className="muted">This run is paused until you approve or reject it.</p>
           ) : null}
+          {planQuestions.length ? (
+            <div className="rules-block">
+              <h3>Questions to answer</h3>
+              <p className="muted small">The run stays paused until each question has an answer.</p>
+              {planQuestions.map((question, index) => (
+                <label className="field" key={`${index}-${question}`}>
+                  <span>{question}</span>
+                  <textarea
+                    rows={3}
+                    value={answers[index] || ''}
+                    onChange={(event) => {
+                      const next = planQuestions.map((_, i) => answers[i] || '')
+                      next[index] = event.target.value
+                      setAnswers(next)
+                    }}
+                  />
+                </label>
+              ))}
+            </div>
+          ) : null}
           <div className="approval-actions">
             <button
               type="button"
               className="btn btn-primary"
-              disabled={deciding || !canDecide}
+              disabled={
+                deciding ||
+                !canDecide ||
+                planQuestions.some((_, index) => !String(answers[index] || '').trim())
+              }
               title={canDecide ? 'Approve and resume this run' : 'Available when this step asks for approval'}
               onClick={() => decide('approved')}
             >

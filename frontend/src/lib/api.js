@@ -71,8 +71,12 @@ export const jiraApi = {
 
 export const runApi = {
   get: (runId) => api.get(`/runs/${runId}`),
-  decide: (runId, decision, planHash) =>
-    api.post(`/runs/${runId}/decision`, planHash ? { decision, planHash } : { decision }),
+  decide: (runId, decision, planHash, answers) =>
+    api.post(`/runs/${runId}/decision`, {
+      decision,
+      ...(planHash ? { planHash } : {}),
+      ...(Array.isArray(answers) ? { answers } : {}),
+    }),
   cancel: (runId) => api.post(`/runs/${runId}/cancel`),
   retry: (runId) => api.post(`/runs/${runId}/retry`),
 }

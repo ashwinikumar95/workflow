@@ -16,6 +16,7 @@ const engine = {
   acquireExecutionClaim,
   renewExecutionClaim,
   persistRun,
+  branchFailureStamp,
   persistWaitingRun,
   beginResume,
   buildExecutionClaimRenewEveryMs,
@@ -199,6 +200,9 @@ async function persistRun(runId, token, patch) {
       $concatArrays: [{ $ifNull: ["$logs", []] }, [{ $literal: patch.log }]],
     };
   }
+  if (patch.failure) {
+    setDoc.failure = { $ifNull: ["$failure", { $literal: patch.failure }] };
+  }
   const saved = await Run.findOneAndUpdate(
     holderFilter(runId, token),
     externalPipeline(setDoc, patch.external),
@@ -209,7 +213,26 @@ async function persistRun(runId, token, patch) {
       failureReason: patch.log && patch.log.error,
     });
   }
+  if (saved && patch.failure && patch.failure.nodeId && patch.failure.reason) {
+    const TicketRun = require("../models/TicketRun");
+    const failureReason = `${patch.failure.nodeId}: ${patch.failure.reason}`;
+    await TicketRun.updateOne(
+      {
+        runId: String(saved._id),
+        $or: [{ failureReason: { $exists: false } }, { failureReason: null }, { failureReason: "" }],
+      },
+      { $set: { failureReason } }
+    );
+  }
   return saved;
+}
+
+function branchFailureStamp(nodeId, output) {
+  if (!output || typeof output !== "object" || Array.isArray(output)) return null;
+  if (output.branch !== "false" && output.branch !== false) return null;
+  const reason = typeof output.reason === "string" ? output.reason.trim() : "";
+  if (!reason) return null;
+  return { nodeId, reason };
 }
 
 function externalPipeline(setDoc, external) {
@@ -954,10 +977,20 @@ async function walkClaimed(workflow, run, token, position, leaseMs) {
       if (!saved) throw claimBusy();
       if (output.kind === "approval") {
         const slack = require("./slackService");
+        const plan =
+          output.output && output.output.plan && typeof output.output.plan === "object"
+            ? output.output.plan
+            : {};
+        const questions = Array.isArray(plan.questions)
+          ? plan.questions.filter((question) => typeof question === "string" && question.trim())
+          : [];
+        const askQuestions = currentNode.id === "approvePlan" && questions.length > 0;
         await slack.emit(run._id, "waiting_for_approval", {
           nodeId: currentNode.id,
           stage: "awaiting_approval",
-          reason: "waiting for approval",
+          reason: askQuestions
+            ? `waiting for approval (${questions.length} question${questions.length === 1 ? "" : "s"} need answers)`
+            : "waiting for approval",
         });
       }
       if (output.kind === "agent" || output.kind === "playwright") {
@@ -969,14 +1002,17 @@ async function walkClaimed(workflow, run, token, position, leaseMs) {
     const next = getNextNode(workflow, currentNode, output);
     const done = next == null;
     const nextInput = carryForward(currentInput, output);
+    const failure = branchFailureStamp(currentNode.id, output);
     const saved = await engine.persistRun(run._id, token, {
       context: nextInput,
       currentNodeId: next ? next.id : null,
       status: done ? "success" : "running",
       ended: done,
+      failure: failure || undefined,
       log: {
         nodeId: currentNode.id,
         status: "success",
+        ...(failure ? { error: failure.reason } : {}),
         input: preview(currentInput),
         output: preview(output),
         duration: Date.now() - started,

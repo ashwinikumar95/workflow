@@ -168,6 +168,20 @@ function externalPatch(role, fields) {
   return { repos: { [role]: fields } };
 }
 
+// The commit the change set starts from. Set once by the first agent prepare on a
+// worktree and never moved, so diff-based checks (review, rules, test selection,
+// commit guard, Playwright) still see every agent commit made after it. The
+// per-run `preAgentSha` moves with each agent and is only for "did this agent
+// change HEAD?" checks.
+function baselineShaFor(external, base) {
+  return (
+    (external && external.baselineSha) ||
+    (external && external.preAgentSha) ||
+    (base && base.preAgentSha) ||
+    ""
+  );
+}
+
 function tokenFromWorkflow(workflow, repository) {
   const ref =
     (repository && typeof repository.credentialRef === "string" && repository.credentialRef) ||
@@ -257,7 +271,7 @@ async function applyGuard(node, base, runState, stage) {
   const profile = profileFromInput(base);
   const result = await commitPushGuard.assertCommitPushGuard({
     worktreePath,
-    baseSha: active.preAgentSha || base.preAgentSha || base.baseSha,
+    baseSha: baselineShaFor(active, base) || base.baseSha,
     sourceRepoPath: active.repoPath || (profile && profile.repo && profile.repo.location) || "",
     credentialFiles: credentialFilesFor(node, base),
     stage,
@@ -393,7 +407,7 @@ async function cursorPromptNode(node, input, runState) {
   } else if (mode === "review") {
     let diff = typeof base.diff === "string" ? base.diff : "";
     const worktree = repoRoot;
-    const fromSha = externalFor(runState, nodeRole(node)).preAgentSha || base.preAgentSha;
+    const fromSha = baselineShaFor(externalFor(runState, nodeRole(node)), base);
     if (!diff && worktree && fromSha) {
       try {
         const result = await git.runGit(["-C", worktree, "diff", fromSha, "HEAD"]);
@@ -410,13 +424,14 @@ async function cursorPromptNode(node, input, runState) {
       artifactPath: reviewPath(runId),
     });
   } else if (mode === "implement" || mode === "fix") {
+    const feedback = mode === "fix" ? prompts.buildFixFeedback(base) : base.feedback;
     if (cfg.linkedScript) {
       prompt = prompts.buildLinkedScriptPrompt({
         issue: base.jira || {},
         plan: base.plan,
         manifest,
         classification: base.failureClassification,
-        feedback: base.feedback,
+        feedback,
         artifactPath: resultPath(runId),
       });
     } else {
@@ -424,14 +439,41 @@ async function cursorPromptNode(node, input, runState) {
         issue: base.jira || {},
         plan: base.plan,
         manifest,
-        feedback: base.feedback,
+        feedback,
+        clarifications: base.clarifications,
+        fix: mode === "fix",
         artifactPath: resultPath(runId),
       });
     }
   } else {
     prompt = prompts.buildPrompt(base.jira || {}, base.analysis || {});
   }
-  return { ...base, prompt, rulesManifest: manifest, agentMode: mode || undefined, artifactDir: artifacts };
+  const reviewRetried = Boolean(base.reviewRetried || cfg.reviewRetry);
+  return {
+    ...base,
+    prompt,
+    rulesManifest: manifest,
+    agentMode: mode || undefined,
+    artifactDir: artifacts,
+    reviewRetried,
+  };
+}
+
+function annotateStop(mode, result) {
+  if (!result || typeof result !== "object" || Array.isArray(result) || result.control) return result;
+  if (result.branch !== "false") return result;
+  const reason = typeof result.reason === "string" ? result.reason : "";
+  let stopDetail = reason;
+  if (reason === "no-commit" && mode === "fix") stopDetail = "fix attempt made no new commit";
+  else if (reason === "no-commit") stopDetail = "implementation did not produce a clean commit";
+  if (!stopDetail) return result;
+  return { ...result, stopDetail };
+}
+
+async function cursorAgent(node, input, runState) {
+  const mode = normalizeMode(node && node.config && node.config.mode);
+  const result = await cursorAgentNode(node, input, runState);
+  return annotateStop(mode, result);
 }
 
 async function gitBranchNode(node, input, runState) {
@@ -513,7 +555,7 @@ async function finishReadOnlyAgent(node, base, runState, mode) {
       plan: parsed.value,
       planHash: parsed.hash,
       rulesApplied: parsed.value.rulesApplied,
-      baseSha: preAgentSha || head,
+      baseSha: baselineShaFor(active, base) || preAgentSha || head,
     };
   }
   const parsed = readReview(reviewPath(runState.runId));
@@ -642,6 +684,7 @@ async function cursorAgentNode(node, input, runState) {
   const external = externalPatch(role, {
     agentExecutionId,
     preAgentSha: head,
+    baselineSha: active.baselineSha || head,
     worktreePath,
     worktreeState: "ready",
   });
@@ -673,7 +716,7 @@ async function rulesChecksNode(node, input, runState) {
   const role = nodeRole(node);
   const active = externalFor({ ...runState, node }, role);
   const worktreePath = role ? active.worktreePath : active.worktreePath || base.worktreePath;
-  const fromSha = active.preAgentSha || base.preAgentSha;
+  const fromSha = baselineShaFor(active, base);
   const profile = profileFromInput(base);
   const repoName =
     (node.config && node.config.repository && node.config.repository.repo) ||
@@ -709,7 +752,7 @@ async function testSelectNode(node, input, runState) {
   const role = nodeRole(node) || (mode === "automation" ? "automation" : "app");
   const active = externalFor(runState, role);
   const worktreePath = active.worktreePath || base.worktreePath;
-  const fromSha = active.preAgentSha || base.preAgentSha;
+  const fromSha = baselineShaFor(active, base);
   const selection = await testSelect.selectForRun({
     input: base,
     config: { ...cfg, mode },
@@ -754,8 +797,8 @@ async function playwrightNode(node, input, runState) {
   const appExt = externalFor(state, "app");
   const autoExt = externalFor(state, "automation");
   const changedPath = role ? active.worktreePath : active.worktreePath || base.worktreePath;
-  const preAgentSha = active.preAgentSha;
-  const ready = await git.readyForPlaywright(changedPath, preAgentSha);
+  const baselineSha = baselineShaFor(active, base);
+  const ready = await git.readyForPlaywright(changedPath, baselineSha);
   if (!ready.ok) {
     await removeQuiet(state);
     const slack = require("../services/slackService");
@@ -863,8 +906,8 @@ async function playwrightNode(node, input, runState) {
       : appExt.repoPath || active.repoPath;
   const baseSha =
     ticketKind === "automation"
-      ? autoExt.preAgentSha || preAgentSha
-      : appExt.preAgentSha || preAgentSha;
+      ? baselineShaFor(autoExt, base) || baselineSha
+      : baselineShaFor(appExt, base) || baselineSha;
   return {
     control: "wait",
     kind: "playwright",
@@ -897,7 +940,7 @@ async function playwrightNode(node, input, runState) {
       appCredentialFiles,
       appSourceRepoPath,
       app,
-      preAgentSha,
+      preAgentSha: baselineSha,
       runtime: nodeRuntime(node, runState),
     },
   };
@@ -1001,11 +1044,12 @@ module.exports = {
   analysis: analysisNode,
   cursorPrompt: cursorPromptNode,
   gitBranch: gitBranchNode,
-  cursorAgent: cursorAgentNode,
+  cursorAgent,
   rulesChecks: rulesChecksNode,
   testSelect: testSelectNode,
   playwright: playwrightNode,
   githubPr: githubPrNode,
   repositoryForNode,
   isManualIntake,
+  baselineShaFor,
 };

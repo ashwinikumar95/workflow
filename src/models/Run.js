@@ -46,6 +46,12 @@ const runSchema = new mongoose.Schema({
   startedAt: Date,
   endedAt: Date,
 
+  /** First step that returned branch false with a reason. */
+  failure: {
+    nodeId: String,
+    reason: String,
+  },
+
   logs: [
     {
       nodeId: String,

@@ -82,12 +82,35 @@ async function recordDecision(runId, decision, userId, extras = {}) {
   const planHash = expectedHash || (extras && extras.planHash) || "";
   const baseSha = run.context && typeof run.context.baseSha === "string" ? run.context.baseSha : "";
 
+  const questions =
+    run.wait.nodeId === "approvePlan" &&
+    run.context &&
+    run.context.plan &&
+    Array.isArray(run.context.plan.questions)
+      ? run.context.plan.questions.filter((question) => typeof question === "string" && question.trim())
+      : [];
+  let clarifications;
+  if (decision === "approved" && questions.length) {
+    const answers = extras && Array.isArray(extras.answers) ? extras.answers : [];
+    const complete =
+      answers.length === questions.length &&
+      answers.every((answer) => typeof answer === "string" && answer.trim());
+    if (!complete) {
+      return { http: 400, error: "Answer every plan question before approving" };
+    }
+    clarifications = questions.map((question, index) => ({
+      question,
+      answer: answers[index].trim(),
+    }));
+  }
+
   const branch = decision === "approved" ? "true" : "false";
   const approval = {
     decision,
     userId: String(userId),
     branch,
   };
+  if (clarifications) approval.clarifications = clarifications;
   if (planHash) approval.planHash = planHash;
   if (fingerprint) approval.fingerprint = fingerprint;
   if (planHash) approval.expiresAt = expiresAt;
